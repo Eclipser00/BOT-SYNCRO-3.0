@@ -1,0 +1,1 @@
+- [Causa raíz - 0 trades en backtest](project_backtest_0trades.md) — instrument_specs.json ausente bloquea size_percent_by_stop() en el backtest; FakeBroker en live bot tiene defaults hardcodeados

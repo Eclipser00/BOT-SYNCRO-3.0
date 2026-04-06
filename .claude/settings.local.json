@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cmd /c \"mkdir %USERPROFILE%\\\\.claude\\\\skills 2>&1\")",
+      "Bash(cmd /c \"cd %USERPROFILE%\\\\.claude\\\\skills && git clone https://github.com/PleasePrompto/notebooklm-skill notebooklm 2>&1\")",
+      "Bash(powershell:*)",
+      "Bash(cmd:*)",
+      "Bash('C:/Program Files/Python310/python.exe' -c ':*)",
+      "Bash(python3 -c ':*)",
+      "Bash(python -c ':*)"
+    ]
+  }
+}

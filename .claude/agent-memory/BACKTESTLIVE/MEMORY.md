@@ -1,0 +1,2 @@
+- [Paridad Backtest-Live PivotZoneTest](project_parity_audit.md) — Auditoría 2026-04-03: datos y zonas idénticos; 0 trades backtest vs 69 trades live (divergencia estructural conocida)
+- [Perfil del usuario - Trading Developer](user_role.md) — Desarrollador de bots algorítmicos Python/MT5, estrategia activa PivotZoneTest M3/M9
