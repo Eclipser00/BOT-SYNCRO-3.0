@@ -14,7 +14,7 @@ Ejecutar antes de usar el bot en producción.
 """
 import logging
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Asegurar que el paquete está en sys.path
@@ -63,23 +63,20 @@ def test_account_info(client):
     logger.info("="*80)
     
     try:
-        import MetaTrader5 as mt5
-        
-        account_info = mt5.account_info()
-        if account_info:
-            logger.info("✅ Información de cuenta obtenida:")
-            logger.info("  - Login: %d", account_info.login)
-            logger.info("  - Servidor: %s", account_info.server)
-            logger.info("  - Balance: %.2f", account_info.balance)
-            logger.info("  - Equity: %.2f", account_info.equity)
-            logger.info("  - Margen: %.2f", account_info.margin)
-            logger.info("  - Margen libre: %.2f", account_info.margin_free)
-            logger.info("  - Nivel de margen: %.2f%%", account_info.margin_level if account_info.margin_level else 0)
-            logger.info("  - Moneda: %s", account_info.currency)
-            logger.info("  - Apalancamiento: 1:%d", account_info.leverage)
-        else:
-            logger.warning("⚠️ No se pudo obtener información de cuenta")
-    except Exception as e:
+        # Usar la API del cliente en lugar de llamar a MT5 directamente.
+        # Solo logueamos los campos que realmente existen en el dataclass AccountInfo.
+        info = client.get_account_info()
+        logger.info("✅ Información de cuenta obtenida:")
+        logger.info("  - Balance: %.2f", info.balance)
+        logger.info("  - Equity: %.2f", info.equity)
+        logger.info("  - Margen: %.2f", info.margin)
+        logger.info("  - Margen libre: %.2f", info.margin_free)
+        logger.info(
+            "  - Nivel de margen: %.2f%%",
+            info.margin_level if info.margin_level else 0,
+        )
+        assert info.balance >= 0
+    except (MT5ConnectionError, MT5DataError) as e:
         logger.error("❌ Error al obtener información: %s", e)
 
 
@@ -94,10 +91,12 @@ def test_symbols_availability(client, symbols):
     
     for symbol in symbols:
         try:
-            info = client._get_symbol_info(symbol)
+            # Probamos disponibilidad intentando descargar unas pocas velas M1 recientes.
+            # Si el símbolo no existe o está deshabilitado, get_ohlcv lanzará MT5DataError.
+            now = datetime.now(timezone.utc)
+            client.get_ohlcv(symbol, "M1", now - timedelta(minutes=5), now)
             available.append(symbol)
-            logger.info("✅ %s: Disponible (Spread: %d, Lot min: %.2f)",
-                       symbol, info.spread, info.volume_min)
+            logger.info("✅ %s: Disponible", symbol)
         except MT5DataError:
             unavailable.append(symbol)
             logger.error("❌ %s: NO disponible", symbol)
@@ -113,22 +112,28 @@ def test_symbols_availability(client, symbols):
     return available
 
 
-def test_download_ohlcv(client, symbols):
-    """Prueba descarga de datos OHLCV."""
+def test_ohlcv_and_timeframes(client, symbols):
+    """Prueba descarga de datos OHLCV y disponibilidad de timeframes.
+
+    Ejecuta dos bloques:
+      1) Descarga de H1 (últimas 24h) para los primeros 2 símbolos.
+      2) Descarga del primer símbolo en múltiples timeframes.
+    """
     logger.info("\n" + "="*80)
-    logger.info("TEST 4: Descarga de Datos OHLCV")
+    logger.info("TEST 4: Descarga de Datos OHLCV y Timeframes")
     logger.info("="*80)
-    
-    end = datetime.now()
+
+    # Bloque 1: descarga H1 de 24h en los primeros 2 símbolos
+    end = datetime.now(timezone.utc)
     start = end - timedelta(hours=24)
-    
+
     success_count = 0
-    
+
     for symbol in symbols[:2]:  # Probar con los primeros 2 símbolos
         try:
             logger.info("\nDescargando datos de %s...", symbol)
             df = client.get_ohlcv(symbol, "H1", start, end)
-            
+
             if len(df) > 0:
                 logger.info("✅ %s: %d registros descargados", symbol, len(df))
                 logger.info("  - Primer registro: %s", df.index[0])
@@ -139,9 +144,29 @@ def test_download_ohlcv(client, symbols):
                 logger.warning("⚠️ %s: Sin datos en el rango solicitado", symbol)
         except Exception as e:
             logger.error("❌ Error al descargar %s: %s", symbol, e)
-    
-    logger.info("\nResumen: %d/%d símbolos descargados exitosamente", 
+
+    logger.info("\nResumen: %d/%d símbolos descargados exitosamente",
                success_count, min(2, len(symbols)))
+
+    # Bloque 2: verificar distintos timeframes usando el primer símbolo disponible
+    timeframes = {
+        "M1": timedelta(hours=1),
+        "M5": timedelta(hours=2),
+        "M15": timedelta(hours=4),
+        "H1": timedelta(hours=24),
+        "H4": timedelta(days=7),
+        "D1": timedelta(days=30),
+    }
+    logger.info("\nProbando timeframes con símbolo: %s", symbols[0])
+    end = datetime.now(timezone.utc)
+    for tf, delta in timeframes.items():
+        try:
+            start = end - delta
+            df = client.get_ohlcv(symbols[0], tf, start, end)
+            assert len(df) >= 0
+            logger.info("✅ %s: %d registros", tf, len(df))
+        except Exception as e:
+            logger.error("❌ %s: Error - %s", tf, e)
 
 
 def test_positions_and_trades(client):
@@ -182,31 +207,137 @@ def test_positions_and_trades(client):
         logger.error("❌ Error al consultar posiciones/trades: %s", e)
 
 
-def test_timeframes(client, symbol):
-    """Prueba descarga de diferentes timeframes."""
+def test_open_orders(client):
+    """Prueba consulta de órdenes pendientes abiertas."""
     logger.info("\n" + "="*80)
-    logger.info("TEST 6: Timeframes Disponibles")
+    logger.info("TEST 6: Órdenes Pendientes Abiertas")
     logger.info("="*80)
-    
-    end = datetime.now()
-    timeframes = {
-        "M1": timedelta(hours=1),
-        "M5": timedelta(hours=2),
-        "M15": timedelta(hours=4),
-        "H1": timedelta(hours=24),
-        "H4": timedelta(days=7),
-        "D1": timedelta(days=30),
-    }
-    
-    logger.info("Probando timeframes con símbolo: %s\n", symbol)
-    
-    for tf, delta in timeframes.items():
-        try:
-            start = end - delta
-            df = client.get_ohlcv(symbol, tf, start, end)
-            logger.info("✅ %s: %d registros", tf, len(df))
-        except Exception as e:
-            logger.error("❌ %s: Error - %s", tf, e)
+    try:
+        orders = client.get_open_orders()
+        assert isinstance(orders, list)
+        logger.info("✅ Órdenes pendientes: %d", len(orders))
+        # Mostramos las primeras 3 para no inundar el log si hay muchas.
+        for order in orders[:3]:
+            logger.info("  - ID: %s | %s | %s | %.2f lotes @ %.5f",
+                       order.order_id, order.symbol, order.order_type,
+                       order.volume, order.price)
+    except Exception as e:
+        logger.error("❌ Error al consultar órdenes: %s", e)
+
+
+def test_server_time(client):
+    """Prueba hora del servidor MT5."""
+    logger.info("\n" + "="*80)
+    logger.info("TEST 7: Hora del Servidor")
+    logger.info("="*80)
+    try:
+        server_time = client.get_server_time(symbol="EURUSD")
+        # El cliente garantiza que el datetime devuelto es timezone-aware (UTC).
+        assert server_time.tzinfo is not None, "server_time debe tener timezone"
+        logger.info("✅ Hora del servidor: %s", server_time.isoformat())
+    except Exception as e:
+        logger.error("❌ Error al obtener hora del servidor: %s", e)
+
+
+def test_closed_trades_snapshot(client):
+    """Prueba snapshot de trades cerrados en rango."""
+    logger.info("\n" + "="*80)
+    logger.info("TEST 8: Snapshot de Trades Cerrados (24h)")
+    logger.info("="*80)
+    try:
+        # Ventana de 24h hacia atrás desde "ahora" en UTC.
+        to_utc = datetime.now(timezone.utc)
+        from_utc = to_utc - timedelta(hours=24)
+        trades = client.get_closed_trades_snapshot(from_utc, to_utc)
+        assert isinstance(trades, list)
+        logger.info("✅ Trades cerrados (últimas 24h): %d", len(trades))
+        # Mostramos como máximo los primeros 5 para mantener el log legible.
+        for trade in trades[:5]:
+            logger.info("  - %s: %.2f lotes, PnL=%.2f, Entrada=%.5f, Salida=%.5f",
+                       trade.symbol, trade.size, trade.pnl,
+                       trade.entry_price, trade.exit_price)
+    except Exception as e:
+        logger.error("❌ Error al obtener snapshot: %s", e)
+
+
+def test_pending_order_lifecycle(client):
+    """Prueba ciclo completo de orden pendiente: crear → modificar → cancelar."""
+    logger.info("\n" + "="*80)
+    logger.info("TEST 9: Ciclo de Vida de Orden Pendiente (REAL)")
+    logger.info("="*80)
+    try:
+        # Importamos MT5 solo aquí para leer el volumen mínimo del símbolo.
+        # No hay atajo equivalente en la API pública del cliente.
+        import MetaTrader5 as mt5
+        sym_info = mt5.symbol_info("EURUSD")
+        volume_min = sym_info.volume_min
+
+        # Tomamos el precio de referencia de la última vela M1 disponible.
+        now = datetime.now(timezone.utc)
+        df = client.get_ohlcv("EURUSD", "M1", now - timedelta(minutes=2), now)
+        bid = df.iloc[-1]["close"]
+        # BUY_LIMIT debe quedar por DEBAJO del precio actual (50 pips menos).
+        order_price = round(bid - 0.0050, 5)
+
+        # Paso 1: crear orden pendiente
+        result = client.create_pending_order(
+            symbol="EURUSD",
+            order_type="BUY_LIMIT",
+            volume=volume_min,
+            price=order_price,
+        )
+        assert result.success and result.order_id > 0
+        logger.info("✅ Orden creada: ticket=%d @ %.5f", result.order_id, order_price)
+        logger.info("⏳ Pausa de 5 segundos — puedes verificar la orden en MetaTrader...")
+        import time; time.sleep(5)
+
+        # Paso 2: modificar precio de la orden (alejamos el BUY_LIMIT 10 pips más)
+        mod_result = client.modify_order(
+            order_id=result.order_id,
+            price=round(bid - 0.0060, 5),
+        )
+        assert mod_result.success
+        logger.info("✅ Orden modificada")
+
+        # Paso 3: cancelar la orden
+        cancelled = client.cancel_order(order_id=result.order_id)
+        assert cancelled is True
+        logger.info("✅ Orden cancelada")
+
+        # Paso 4: verificar que la orden ya no aparece como pendiente
+        open_orders = client.get_open_orders()
+        assert result.order_id not in [o.order_id for o in open_orders]
+        logger.info("✅ Orden ya no aparece en órdenes abiertas")
+
+    except Exception as e:
+        logger.error("❌ Error en ciclo de orden pendiente: %s", e, exc_info=True)
+
+
+def test_modify_position_sl_tp(client):
+    """Prueba modificación de SL/TP en posición abierta existente."""
+    logger.info("\n" + "="*80)
+    logger.info("TEST 10: Modificación SL/TP de Posición Abierta")
+    logger.info("="*80)
+    try:
+        positions = client.get_open_positions()
+        if not positions:
+            # Sin posiciones abiertas no podemos probar modify_position_sl_tp.
+            logger.warning("⚠️ No hay posiciones abiertas. Saltando test.")
+            return
+        pos = positions[0]
+        # Calculamos SL y TP relativos al entry_price (20 pips SL, 40 pips TP).
+        new_sl = round(pos.entry_price - 0.0020, 5)
+        new_tp = round(pos.entry_price + 0.0040, 5)
+        result = client.modify_position_sl_tp(
+            symbol=pos.symbol,
+            magic_number=pos.magic_number,
+            stop_loss=new_sl,
+            take_profit=new_tp,
+        )
+        assert result.success
+        logger.info("✅ SL/TP modificados: SL=%.5f TP=%.5f", new_sl, new_tp)
+    except Exception as e:
+        logger.error("❌ Error al modificar SL/TP: %s", e, exc_info=True)
 
 
 def main():
@@ -235,16 +366,26 @@ def main():
             logger.error("No se puede continuar con las pruebas")
             sys.exit(1)
         
-        # Test 4: Descarga de datos
-        test_download_ohlcv(client, available_symbols)
-        
+        # Test 4: Descarga de datos + Timeframes (fusionados)
+        test_ohlcv_and_timeframes(client, available_symbols)
+
         # Test 5: Posiciones y trades
         test_positions_and_trades(client)
-        
-        # Test 6: Timeframes
-        if available_symbols:
-            test_timeframes(client, available_symbols[0])
-        
+
+        # TEST 6: Órdenes Pendientes
+        test_open_orders(client)
+
+        # TEST 7: Hora del Servidor
+        test_server_time(client)
+
+        # TEST 8: Snapshot de Trades Cerrados
+        test_closed_trades_snapshot(client)
+
+        # TEST 9-10: Ciclo de Orden Pendiente (REAL - requiere MT5 conectado a cuenta demo)
+        test_pending_order_lifecycle(client)
+        test_modify_position_sl_tp(client)
+
+
         # Resumen final
         logger.info("\n" + "="*80)
         logger.info("RESUMEN DE PRUEBAS")

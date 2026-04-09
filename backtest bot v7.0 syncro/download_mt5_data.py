@@ -20,16 +20,17 @@ import pandas as pd
 # ============================================================
 # TOGGLES (edit these values before running)
 # ============================================================
-START_UTC = "2026-02-01 00:00:00"  # YYYY-MM-DD HH:MM:SS (UTC)
-END_UTC = "2026-02-8 00:00:00"  # YYYY-MM-DD HH:MM:SS (UTC)
-TICKERS = ["EURUSD", "GBPUSD", "USDJPY"]
-TIMEFRAME = "M1"  # M1|M5|M15|M30|H1|H4|D1|W1|MN1
+START_UTC = "2026-03-30 00:00:00"  # YYYY-MM-DD HH:MM:SS (UTC)
+END_UTC = "2026-04-08 23:59:55"  # YYYY-MM-DD HH:MM:SS (UTC)
+TICKERS = ["EURUSD","GBPUSD","USDJPY","AUDUSD"]  # Comma-separated list de simbolos (ej: "EURUSD,GBPUSD,USDJPY")
+TIMEFRAME = "M3"  # M1|M3|M5|M15|M30|H1|H4|D1|W1|MN1
 OUTPUT_DIR = "data01"
 OVERWRITE = True
 
 
 TIMEFRAME_MAP = {
     "M1": mt5.TIMEFRAME_M1,
+    "M3": mt5.TIMEFRAME_M3,
     "M5": mt5.TIMEFRAME_M5,
     "M15": mt5.TIMEFRAME_M15,
     "M30": mt5.TIMEFRAME_M30,

@@ -1,0 +1,1 @@
+- [Test coverage map](project_test_coverage.md) — which source files have tests and the mt5-mocking pattern required
