@@ -9,6 +9,9 @@ format used by this backtest project:
 
 from __future__ import annotations
 
+import json
+import math
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
@@ -20,12 +23,14 @@ import pandas as pd
 # ============================================================
 # TOGGLES (edit these values before running)
 # ============================================================
-START_UTC = "2026-03-30 00:00:00"  # YYYY-MM-DD HH:MM:SS (UTC)
-END_UTC = "2026-04-08 23:59:55"  # YYYY-MM-DD HH:MM:SS (UTC)
-TICKERS = ["EURUSD","GBPUSD","USDJPY","AUDUSD"]  # Comma-separated list de simbolos (ej: "EURUSD,GBPUSD,USDJPY")
+START_UTC = "2026-03-16 00:00:00"  # YYYY-MM-DD HH:MM:SS (UTC)
+END_UTC = "2026-04-10 23:59:55"  # YYYY-MM-DD HH:MM:SS (UTC)
+TICKERS = ["JPM","XOM","v","MA","BAC","INTC","PLTR","RTX","WFC","TMUS","AXP","NEE","TXN","T"]  # Comma-separated list de simbolos (ej: "EURUSD,GBPUSD,USDJPY")
 TIMEFRAME = "M3"  # M1|M3|M5|M15|M30|H1|H4|D1|W1|MN1
 OUTPUT_DIR = "data01"
+DATA_DEVELOPMENT_DIR = "../last_trading_bot_v2.0_pivot_zone_syncro/data_development"
 OVERWRITE = True
+INSTRUMENT_SPECS_PATH = Path(__file__).resolve().parents[1] / "shared" / "instrument_specs.json"
 
 
 TIMEFRAME_MAP = {
@@ -66,6 +71,16 @@ def normalize_tickers(raw_tickers: Iterable[str]) -> list[str]:
         normalized.append(symbol)
         seen.add(symbol)
     return normalized
+
+
+def safe_float(value) -> float | None:
+    try:
+        casted = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(casted):
+        return None
+    return casted
 
 
 def validate_inputs() -> tuple[datetime, datetime, str, list[str]]:
@@ -164,6 +179,110 @@ def write_symbol_csv(df: pd.DataFrame, output_path: Path) -> None:
     df.to_csv(output_path, index=False)
 
 
+def latest_available_price(symbol: str) -> float | None:
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        return None
+
+    for field_name in ("last", "ask", "bid"):
+        price = safe_float(getattr(tick, field_name, None))
+        if price is not None and price > 0:
+            return price
+    return None
+
+
+def calculate_margin_per_lot(symbol: str, symbol_info) -> float | None:
+    price = latest_available_price(symbol)
+    if price is not None:
+        try:
+            margin = mt5.order_calc_margin(mt5.ORDER_TYPE_BUY, symbol, 1.0, price)
+        except Exception as exc:  # noqa: BLE001
+            log(f"WARN {symbol}: order_calc_margin fallo con precio {price}: {exc}")
+        else:
+            margin_value = safe_float(margin)
+            if margin_value is not None and margin_value > 0:
+                return margin_value
+            log(f"WARN {symbol}: order_calc_margin no devolvio margen valido con precio {price}.")
+    else:
+        log(f"WARN {symbol}: no hay ultimo precio disponible para calcular margin_per_lot.")
+
+    margin_initial = safe_float(getattr(symbol_info, "margin_initial", None))
+    if margin_initial is not None and margin_initial > 0:
+        log(f"WARN {symbol}: usando margin_initial como fallback de margin_per_lot.")
+        return margin_initial
+
+    log(f"WARN {symbol}: margin_per_lot omitido; MT5 no devolvio margen ni margin_initial valido.")
+    return None
+
+
+def build_symbol_specs(symbol: str) -> dict[str, float]:
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        log(f"WARN {symbol}: symbol_info no disponible; specs vacias.")
+        return {}
+
+    specs: dict[str, float] = {}
+    field_map = {
+        "trade_tick_size": "trade_tick_size",
+        "trade_tick_value": "trade_tick_value",
+        "trade_contract_size": "trade_contract_size",
+        "volume_min": "volume_min",
+        "volume_step": "volume_step",
+        "volume_max": "volume_max",
+    }
+
+    for output_key, mt5_attr in field_map.items():
+        value = safe_float(getattr(info, mt5_attr, None))
+        if value is not None:
+            specs[output_key] = value
+
+    margin_per_lot = calculate_margin_per_lot(symbol, info)
+    if margin_per_lot is not None:
+        specs["margin_per_lot"] = margin_per_lot
+
+    return specs
+
+
+def write_instrument_specs(specs: dict[str, dict[str, float]], specs_path: Path = INSTRUMENT_SPECS_PATH) -> None:
+    specs_path.parent.mkdir(parents=True, exist_ok=True)
+    specs_path.write_text(
+        json.dumps(specs, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    log(f"Specs instrumentos sincronizadas: {len(specs)} simbolo(s) -> {specs_path}")
+
+
+def sync_csv_data_dirs(output_dir: Path, data_development_dir: Path, stage: str) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    data_development_dir.mkdir(parents=True, exist_ok=True)
+
+    if stage == "before_download":
+        deleted = {
+            output_dir: 0,
+            data_development_dir: 0,
+        }
+        for directory in deleted:
+            for csv_path in directory.glob("*.csv"):
+                csv_path.unlink()
+                deleted[directory] += 1
+        log(
+            "Limpieza inicial CSV: "
+            f"{deleted[output_dir]} eliminados en {output_dir} | "
+            f"{deleted[data_development_dir]} eliminados en {data_development_dir}"
+        )
+        return
+
+    if stage == "after_download":
+        copied = 0
+        for csv_path in sorted(output_dir.glob("*.csv")):
+            shutil.copy2(csv_path, data_development_dir / csv_path.name)
+            copied += 1
+        log(f"Sincronizacion final CSV: {copied} copiados a {data_development_dir}")
+        return
+
+    raise ValueError(f"stage no valido para sync_csv_data_dirs: {stage}")
+
+
 def main() -> int:
     try:
         start_utc, end_utc, timeframe, tickers = validate_inputs()
@@ -174,7 +293,9 @@ def main() -> int:
     mt5_tf = TIMEFRAME_MAP[timeframe]
     project_root = Path(__file__).resolve().parent
     output_dir = project_root / OUTPUT_DIR
-    output_dir.mkdir(parents=True, exist_ok=True)
+    data_development_dir = (project_root / DATA_DEVELOPMENT_DIR).resolve()
+    sync_csv_data_dirs(output_dir, data_development_dir, "before_download")
+    instrument_specs: dict[str, dict[str, float]] = {}
 
     log(
         "Configuracion: "
@@ -185,6 +306,7 @@ def main() -> int:
     if not mt5.initialize():
         error_code, error_msg = mt5.last_error()
         log(f"ERROR al inicializar MetaTrader5. Error {error_code}: {error_msg}")
+        write_instrument_specs({})
         return 1
 
     success: list[tuple[str, int, Path]] = []
@@ -204,6 +326,11 @@ def main() -> int:
 
                 output_path = output_dir / f"{symbol}.csv"
                 write_symbol_csv(ohlcv, output_path)
+                try:
+                    instrument_specs[symbol] = build_symbol_specs(symbol)
+                except Exception as spec_exc:  # noqa: BLE001
+                    instrument_specs[symbol] = {}
+                    log(f"WARN {symbol}: no se pudieron construir specs MT5: {spec_exc}")
                 success.append((symbol, len(ohlcv), output_path))
                 log(f"OK {symbol}: {len(ohlcv)} filas -> {output_path}")
             except Exception as exc:  # noqa: BLE001
@@ -225,8 +352,11 @@ def main() -> int:
             log(f"  FALLO {symbol}: {reason}")
 
     if success:
+        write_instrument_specs(instrument_specs)
+        sync_csv_data_dirs(output_dir, data_development_dir, "after_download")
         return 0
 
+    write_instrument_specs({})
     log("No se genero ningun CSV. Exit code = 1.")
     return 1
 

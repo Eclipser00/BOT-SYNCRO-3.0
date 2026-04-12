@@ -347,6 +347,60 @@ def test_auto_visualizer_bootstrap_historico_separa_fuentes(tmp_path) -> None:
     assert "position" in event_types
 
 
+def test_auto_visualizer_bootstrap_historico_fakebroker_carga_fills_desde_jsonl(tmp_path) -> None:
+    symbols = [SymbolConfig(name="EURUSD", min_timeframe="M1")]
+    pivot_log = tmp_path / "pivot_zones.log"
+    events_log = tmp_path / "bot_events.jsonl"
+    pivot_log.write_text("", encoding="utf-8")
+    events_log.write_text(
+        '{"ts_event":"2026-02-11T00:03:00+00:00","symbol":"EURUSD","event_type":"signal","side":"long","price":1.115,"size":0.2,"reason":"legacy_signal"}\n'
+        '{"ts_event":"2026-02-11T00:03:00+00:00","symbol":"EURUSD","event_type":"order_fill","side":"long","price":1.115,"size":0.2,"reason":"fill"}\n'
+        '{"ts_event":"2026-02-11T00:03:00+00:00","symbol":"EURUSD","event_type":"position","side":"long","price":1.115,"size":0.2,"reason":"position_open"}\n'
+        '{"ts_event":"2026-02-11T00:12:00+00:00","symbol":"EURUSD","event_type":"order_fill","side":"short","price":1.145,"size":0.2,"reason":"close_TP"}\n'
+        '{"ts_event":"2026-02-11T00:12:00+00:00","symbol":"EURUSD","event_type":"position","side":"flat","price":1.145,"size":0.0,"reason":"position_update"}\n',
+        encoding="utf-8",
+    )
+
+    service = AutoVisualizerService(
+        symbols=symbols,
+        output_dir=tmp_path,
+        pivot_log_path=pivot_log,
+        bot_events_path=events_log,
+        refresh_seconds=1,
+        start_from_end=False,
+        closed_trades_provider=None,
+    )
+
+    idx = pd.date_range("2026-02-11 00:00:00+00:00", periods=6, freq="3min")
+    frame = pd.DataFrame(
+        {
+            "open": [1.10, 1.11, 1.12, 1.13, 1.14, 1.15],
+            "high": [1.12, 1.13, 1.14, 1.15, 1.16, 1.17],
+            "low": [1.09, 1.10, 1.11, 1.12, 1.13, 1.14],
+            "close": [1.11, 1.12, 1.13, 1.14, 1.15, 1.16],
+            "volume": [1.0] * 6,
+        },
+        index=idx,
+    )
+    service.on_market_data(symbols[0], {"M3": frame}, datetime(2026, 2, 11, 0, 15, tzinfo=timezone.utc))
+
+    state = service.state_store.get_symbol_state("EURUSD")
+    assert state is not None
+    event_types = [str(evt.get("event_type")) for evt in state.entry_events]
+    reasons = [str(evt.get("reason")) for evt in state.entry_events]
+    assert event_types.count("order_fill") == 2
+    assert "legacy_signal" in reasons
+    assert "position_open" in reasons
+    assert "position_update" in reasons
+
+    trades_df = _build_trades_df(state.candles_m3, state.entry_events)
+    assert len(trades_df) == 1
+    trade = trades_df.iloc[0]
+    assert trade["EntryPrice"] == 1.115
+    assert trade["ExitPrice"] == 1.145
+    assert trade["PnL"] > 0
+
+
 def test_auto_visualizer_start_from_end_true_no_bootstrap_mt5(tmp_path) -> None:
     symbols = [SymbolConfig(name="EURUSD", min_timeframe="M1")]
     pivot_log = tmp_path / "pivot_zones.log"

@@ -8,8 +8,10 @@ inside the module under test resolves to our controlled stub values.
 
 from __future__ import annotations
 
+import json
 import importlib
 import sys
+import tempfile
 import types
 import unittest
 from unittest.mock import MagicMock, patch
@@ -41,7 +43,10 @@ _fake_mt5.shutdown = MagicMock()
 _fake_mt5.last_error = MagicMock(return_value=(0, ""))
 _fake_mt5.symbol_info = MagicMock(return_value=None)
 _fake_mt5.symbol_select = MagicMock(return_value=True)
+_fake_mt5.symbol_info_tick = MagicMock(return_value=None)
 _fake_mt5.copy_rates_range = MagicMock(return_value=None)
+_fake_mt5.order_calc_margin = MagicMock(return_value=None)
+_fake_mt5.ORDER_TYPE_BUY = 0
 
 # Inject before the module is loaded so that `import MetaTrader5 as mt5`
 # inside download_mt5_data resolves to our fake.
@@ -264,6 +269,135 @@ class TestNormalizeTickers(unittest.TestCase):
     def test_empty_list_returns_empty(self):
         # An empty input must return an empty list.
         self.assertEqual(normalize_tickers([]), [])
+
+
+# ===========================================================================
+# Tests â€” instrument_specs.json synchronisation helpers
+# ===========================================================================
+
+class TestInstrumentSpecsHelpers(unittest.TestCase):
+    """Validates MT5 symbol specs extraction and JSON overwrite behaviour."""
+
+    def setUp(self):
+        _fake_mt5.symbol_info.reset_mock()
+        _fake_mt5.symbol_info_tick.reset_mock()
+        _fake_mt5.order_calc_margin.reset_mock()
+
+    def _symbol_info(self, margin_initial=999.0):
+        return types.SimpleNamespace(
+            trade_tick_size=0.01,
+            trade_tick_value=1.25,
+            trade_contract_size=100.0,
+            volume_min=0.01,
+            volume_step=0.01,
+            volume_max=50.0,
+            margin_initial=margin_initial,
+        )
+
+    def test_latest_available_price_prefers_last(self):
+        _fake_mt5.symbol_info_tick.return_value = types.SimpleNamespace(
+            last=155.2,
+            ask=155.3,
+            bid=155.1,
+        )
+
+        self.assertEqual(_mod.latest_available_price("XOM"), 155.2)
+
+    def test_latest_available_price_falls_back_to_ask_then_bid(self):
+        _fake_mt5.symbol_info_tick.return_value = types.SimpleNamespace(
+            last=0.0,
+            ask=155.3,
+            bid=155.1,
+        )
+        self.assertEqual(_mod.latest_available_price("XOM"), 155.3)
+
+        _fake_mt5.symbol_info_tick.return_value = types.SimpleNamespace(
+            last=0.0,
+            ask=0.0,
+            bid=155.1,
+        )
+        self.assertEqual(_mod.latest_available_price("XOM"), 155.1)
+
+    def test_build_symbol_specs_uses_order_calc_margin(self):
+        _fake_mt5.symbol_info.return_value = self._symbol_info()
+        _fake_mt5.symbol_info_tick.return_value = types.SimpleNamespace(
+            last=155.2,
+            ask=155.3,
+            bid=155.1,
+        )
+        _fake_mt5.order_calc_margin.return_value = 1234.5
+
+        specs = _mod.build_symbol_specs("XOM")
+
+        self.assertEqual(
+            specs,
+            {
+                "trade_tick_size": 0.01,
+                "trade_tick_value": 1.25,
+                "trade_contract_size": 100.0,
+                "volume_min": 0.01,
+                "volume_step": 0.01,
+                "volume_max": 50.0,
+                "margin_per_lot": 1234.5,
+            },
+        )
+        _fake_mt5.order_calc_margin.assert_called_once_with(
+            _fake_mt5.ORDER_TYPE_BUY,
+            "XOM",
+            1.0,
+            155.2,
+        )
+
+    def test_build_symbol_specs_falls_back_to_margin_initial(self):
+        _fake_mt5.symbol_info.return_value = self._symbol_info(margin_initial=777.0)
+        _fake_mt5.symbol_info_tick.return_value = types.SimpleNamespace(
+            last=0.0,
+            ask=155.3,
+            bid=155.1,
+        )
+        _fake_mt5.order_calc_margin.return_value = None
+
+        specs = _mod.build_symbol_specs("XOM")
+
+        self.assertEqual(specs["margin_per_lot"], 777.0)
+        _fake_mt5.order_calc_margin.assert_called_once_with(
+            _fake_mt5.ORDER_TYPE_BUY,
+            "XOM",
+            1.0,
+            155.3,
+        )
+
+    def test_build_symbol_specs_omits_margin_with_explicit_warning(self):
+        _fake_mt5.symbol_info.return_value = self._symbol_info(margin_initial=None)
+        _fake_mt5.symbol_info_tick.return_value = types.SimpleNamespace(
+            last=0.0,
+            ask=0.0,
+            bid=0.0,
+        )
+
+        with patch.object(_mod, "log") as log_mock:
+            specs = _mod.build_symbol_specs("XOM")
+
+        self.assertNotIn("margin_per_lot", specs)
+        logged = "\n".join(str(call.args[0]) for call in log_mock.call_args_list)
+        self.assertIn("no hay ultimo precio disponible", logged)
+        self.assertIn("margin_per_lot omitido", logged)
+
+    def test_write_instrument_specs_overwrites_existing_json(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            specs_path = _os.path.join(temp_dir, "instrument_specs.json")
+            with open(specs_path, "w", encoding="utf-8") as fh:
+                json.dump({"EURUSD": {"trade_tick_size": 0.0001}}, fh)
+
+            _mod.write_instrument_specs(
+                {"JPM": {"trade_tick_size": 0.01}},
+                specs_path=_mod.Path(specs_path),
+            )
+
+            with open(specs_path, encoding="utf-8") as fh:
+                saved = json.load(fh)
+
+        self.assertEqual(saved, {"JPM": {"trade_tick_size": 0.01}})
 
 
 if __name__ == "__main__":

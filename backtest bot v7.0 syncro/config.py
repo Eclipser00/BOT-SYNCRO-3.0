@@ -81,9 +81,9 @@ param_cols = ['n1', 'n2', 'n3']
 # N3_RANGE = np.arange(50, 250, 50).tolist() # ULTIMO DATO NO SE ITERA
 
 # PIVOT ZONE TEST
-N1_RANGE = np.arange(3, 4, 1).tolist() # NO SE PUEDEN PASAR DECIMALES VAYA MIERDA... 
-N2_RANGE = np.arange(100, 150, 50).tolist() # PORQUE BACKTRADER NO LO ADMITE EN LOS INDICADORES...
-N3_RANGE = np.arange(5, 6, 1).tolist() # ULTIMO DATO NO SE ITERA
+N1_RANGE = np.arange(1, 4, 1).tolist() #  Multiplicador de min_distance entre zonas
+N2_RANGE = np.arange(100, 300, 50).tolist() # Ancho zona % ATR
+N3_RANGE = np.arange(4, 7, 1).tolist() # Min pivotes para zona valida
 
 # Timeframes oficiales para PivotZoneTest (minutos)
 PIVOT_TF_ENTRY_MINUTES = 3
@@ -106,7 +106,7 @@ DATA_FOLDER_01 = 'data01'            # Carpeta con archivos CSV
 #DATA_FOLDER_07 = 'data07'
 # ... 
 TIMEZONE = "UTC"  # Alineado con live para evitar desfases de resample M9
-PERIODS_PER_YEAR = 525600 # Se utiliza para calcular las métricas de rendimiento, como Sharpe Ratio, Sortino Ratio, etc..
+PERIODS_PER_YEAR = 175200 # Se utiliza para calcular las métricas de rendimiento, como Sharpe Ratio, Sortino Ratio, etc..
 # PERIODS_PER_YEAR = 24*252       # 1h bolsa
 # PERIODS_PER_YEAR = 390*252      # 1m bolsa USA (6.5h/día)
 # PERIODS_PER_YEAR = 365*24       # 1h 24/7 (crypto/FX)
@@ -115,7 +115,7 @@ PERIODS_PER_YEAR = 525600 # Se utiliza para calcular las métricas de rendimient
 # ==================== EJECUCIÓN ====================
 # Eliminamos Bactesting = True porque ya de por si el programa lo hace.
 # Eliminamos Optimize = True porque siempre estaremos optimizando, cuando solo haya un valor por parametro se pasaran rangos de un valor en la optimizacion.
-OPTIMIZE_MAXIMIZE = 'Expectancy [%]'
+OPTIMIZE_MAXIMIZE = 'Profit Factor'
 
 # Métricas disponibles (puedes usar cualquiera de estas):
 # - 'Equity Final [$]'          → Maximiza

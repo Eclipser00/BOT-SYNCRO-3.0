@@ -1,29 +1,20 @@
 {
-  "EURUSD": {
-    "trade_tick_size": 0.0001,
-    "trade_tick_value": 10.0,
-    "trade_contract_size": 100000.0,
-    "volume_min": 0.01,
-    "volume_step": 0.01,
-    "volume_max": 100.0,
-    "margin_per_lot": 20000.0
-  },
-  "GBPUSD": {
-    "trade_tick_size": 0.0001,
-    "trade_tick_value": 10.0,
-    "trade_contract_size": 100000.0,
-    "volume_min": 0.01,
-    "volume_step": 0.01,
-    "volume_max": 100.0,
-    "margin_per_lot": 20000.0
-  },
-  "USDJPY": {
+  "JPM": {
+    "margin_per_lot": 62.0,
+    "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
-    "trade_tick_value": 6.5,
-    "trade_contract_size": 100000.0,
-    "volume_min": 0.01,
-    "volume_step": 0.01,
-    "volume_max": 100.0,
-    "margin_per_lot": 20000.0
+    "trade_tick_value": 0.01,
+    "volume_max": 100000.0,
+    "volume_min": 1.0,
+    "volume_step": 1.0
+  },
+  "XOM": {
+    "margin_per_lot": 30.46,
+    "trade_contract_size": 1.0,
+    "trade_tick_size": 0.01,
+    "trade_tick_value": 0.01,
+    "volume_max": 100000.0,
+    "volume_min": 1.0,
+    "volume_step": 1.0
   }
 }

@@ -235,27 +235,19 @@ class BotConfig:
 # logging/riesgo; las estrategias y simbolos comparten la misma declaracion.
 DEFAULT_SYMBOLS: List[SymbolConfigEntry] = [
     SymbolConfigEntry(
-        name="EURUSD",  # simbolo/instrumento a operar
+        name="JPM",  # simbolo/instrumento a operar
         min_timeframe="M3",  # timeframe minimo habilitado para este simbolo
-        n1=3,  # separacion minima entre zonas = 3 anchos de zona
-        n2=100,  # ancho de zona = ATR(14) * (100/100) = 1.0x ATR
-        n3=5,  # pivotes minimos para bloquear/validar una zona pivote
+        n1=1,  # separacion minima entre zonas = 3 anchos de zona
+        n2=150,  # ancho de zona = ATR(14) * (100/100) = 1.0x ATR
+        n3=4,  # pivotes minimos para bloquear/validar una zona pivote
         size_pct=0.1,  # riesgo base por operacion al SL (0.1 = 1% de la cuenta)
     ),
     SymbolConfigEntry(
-        name="GBPUSD",  # simbolo/instrumento a operar
+        name="XOM",  # simbolo/instrumento a operar
         min_timeframe="M3",  # timeframe minimo habilitado para este simbolo
-        n1=3,  # separacion minima entre zonas = 3 anchos de zona
-        n2=100,  # ancho de zona = ATR(14) * (100/100) = 1.0x ATR
-        n3=5,  # pivotes minimos para bloquear/validar una zona pivote
-        size_pct=0.1,  # riesgo base por operacion al SL (0.1 = 1% de la cuenta)
-    ),
-    SymbolConfigEntry(
-        name="USDJPY",  # simbolo/instrumento a operar
-        min_timeframe="M3",  # timeframe minimo habilitado para este simbolo
-        n1=3,  # separacion minima entre zonas = 3 anchos de zona
-        n2=100,  # ancho de zona = ATR(14) * (100/100) = 1.0x ATR
-        n3=5,  # pivotes minimos para bloquear/validar una zona pivote
+        n1=1,  # separacion minima entre zonas = 3 anchos de zona
+        n2=200,  # ancho de zona = ATR(14) * (100/100) = 1.0x ATR
+        n3=4,  # pivotes minimos para bloquear/validar una zona pivote
         size_pct=0.1,  # riesgo base por operacion al SL (0.1 = 1% de la cuenta)
     ),
 ]
@@ -312,7 +304,7 @@ ENVIRONMENTS: Dict[str, BotConfig] = {
         data=DataConfig(
             data_mode="production",  # usa feed del broker real
             data_development_dir="data_development",  # carpeta para CSV (no usada en prod)
-            bootstrap_lookback_days_zone=15,  # dias para inicializar zonas
+            bootstrap_lookback_days_zone=30,  # dias para inicializar zonas
             bootstrap_lookback_days_entry=None,  # hereda zona si None
             bootstrap_lookback_days_stop=None,  # hereda zona si None
             csv_base_timeframe="M3",  # timeframe base de CSV
@@ -342,7 +334,7 @@ ENVIRONMENTS: Dict[str, BotConfig] = {
             log_to_file=True,  # escribe a disco
             log_file_path="logs/development.log",  # archivo de log de desarrollo
             pivot_log_file_path="logs/pivot_zones.log",  # log dedicado de zonas pivote
-            visualizer_start_from_end=True,  # False para depurar con historial completo en cada arranque
+            visualizer_start_from_end=False,  # False para depurar con historial completo en cada arranque
         ),
         risk=RiskConfig(
             dd_global=30.0,  # drawdown maximo global

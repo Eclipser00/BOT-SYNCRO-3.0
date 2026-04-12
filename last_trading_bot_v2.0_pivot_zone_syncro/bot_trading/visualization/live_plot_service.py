@@ -123,12 +123,14 @@ class AutoVisualizerService:
             self.state_store.ingest_pivot_zones(pivot_updates)
         logger.info("AutoVisualizer bootstrap pivots_loaded=%d", len(pivot_updates))
 
-        signal_updates = self._read_historical_signals()
-        if signal_updates:
-            self.state_store.ingest_bot_events(signal_updates)
+        event_types = {"signal"} if self.closed_trades_provider is not None else {"signal", "order_fill", "position"}
+        bot_events = self._read_historical_bot_events(event_types)
+        if bot_events:
+            self.state_store.ingest_bot_events(bot_events)
         logger.info(
-            "AutoVisualizer bootstrap signals_loaded=%d",
-            len(signal_updates),
+            "AutoVisualizer bootstrap bot_events_loaded=%d event_types=%s",
+            len(bot_events),
+            ",".join(sorted(event_types)),
         )
 
         snapshot_events = self._build_mt5_snapshot_events(current_time)
@@ -149,7 +151,7 @@ class AutoVisualizerService:
             logger.warning("AutoVisualizer bootstrap no pudo leer pivots historicos: %s", exc)
         return updates
 
-    def _read_historical_signals(self) -> list[dict]:
+    def _read_historical_bot_events(self, event_types: set[str]) -> list[dict]:
         updates: list[dict] = []
         if not self.bot_events_path.exists():
             return updates
@@ -159,11 +161,11 @@ class AutoVisualizerService:
                     parsed = parse_bot_event_line(line.strip())
                     if parsed is None:
                         continue
-                    if str(parsed.get("event_type")) != "signal":
+                    if str(parsed.get("event_type")) not in event_types:
                         continue
                     updates.append(parsed)
         except Exception as exc:
-            logger.warning("AutoVisualizer bootstrap no pudo leer signals historicas: %s", exc)
+            logger.warning("AutoVisualizer bootstrap no pudo leer eventos historicos: %s", exc)
         return updates
 
     def _build_mt5_snapshot_events(self, current_time: datetime) -> list[dict]:
