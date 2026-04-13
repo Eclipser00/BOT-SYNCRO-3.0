@@ -81,8 +81,8 @@ param_cols = ['n1', 'n2', 'n3']
 # N3_RANGE = np.arange(50, 250, 50).tolist() # ULTIMO DATO NO SE ITERA
 
 # PIVOT ZONE TEST
-N1_RANGE = np.arange(1, 4, 1).tolist() #  Multiplicador de min_distance entre zonas
-N2_RANGE = np.arange(100, 300, 50).tolist() # Ancho zona % ATR
+N1_RANGE = np.arange(2, 4, 1).tolist() #  Multiplicador de min_distance entre zonas
+N2_RANGE = np.arange(150, 225, 25).tolist() # Ancho zona % ATR
 N3_RANGE = np.arange(4, 7, 1).tolist() # Min pivotes para zona valida
 
 # Timeframes oficiales para PivotZoneTest (minutos)
