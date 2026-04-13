@@ -618,6 +618,28 @@ def _configure_logging(logging_cfg) -> None:
     )
 
 
+# ============================================
+# LIMPIEZA DE OUTPUTS AL INICIAR
+# Borra archivos generados en ejecuciones anteriores
+# para que cada sesion empiece con un estado limpio.
+# ============================================
+def _clean_outputs() -> None:
+    """Elimina archivos de salida obsoletos del directorio outputs/.
+
+    Borra todos los .html para que cada ejecucion comience
+    sin residuos de sesiones anteriores.
+    """
+    output_dir = (ROOT / "outputs").resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Borrar todos los reportes HTML de ejecuciones previas
+    for html_file in output_dir.glob("*.html"):
+        try:
+            html_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
 def _build_broker():
     """Crea broker real o simulado en funcion de config.py."""
     broker_cfg = settings.broker
@@ -888,6 +910,7 @@ def main() -> None:
     """Ejecuta el bot de trading leyendo toda la configuracion desde config.py."""
     validate_config(settings)
     _configure_logging(settings.logging)
+    _clean_outputs()
 
     logger.info("=" * 80)
     logger.info("Iniciando Bot de Trading (%s) en modo %s", settings.name, settings.mode)
