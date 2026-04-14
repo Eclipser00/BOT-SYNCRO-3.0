@@ -115,7 +115,7 @@ class RiskConfig:
     dd_por_activo: Dict[str, float] = field(default_factory=dict)  # drawdown maximo por simbolo (%)
     dd_por_estrategia: Dict[str, float] = field(default_factory=dict)  # drawdown maximo por estrategia (%)
     initial_balance: float = 20_000.0  # balance de referencia para calculos
-    max_margin_usage_percent: float = 80.0  # porcentaje maximo de margen a usar
+    max_margin_usage_percent: float = 60.0  # porcentaje maximo de margen a usar
 
 
 @dataclass

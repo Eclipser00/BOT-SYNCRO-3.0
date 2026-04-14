@@ -1012,7 +1012,7 @@ class MetaTrader5Client:
             success=True,
             order_id=result.order,
             error_message=None,
-            fill_price=float(result.price) if getattr(result, "price", None) is not None else float(price),
+            fill_price=float(result.price) if getattr(result, "price", None) not in (None, 0.0) else float(price),
         )
 
     def create_pending_order(
@@ -1367,7 +1367,7 @@ class MetaTrader5Client:
             success=True,
             order_id=result.order,
             error_message=None,
-            fill_price=float(result.price) if getattr(result, "price", None) is not None else float(price),
+            fill_price=float(result.price) if getattr(result, "price", None) not in (None, 0.0) else float(price),
         )
 
     def get_open_positions(self) -> list[Position]:
