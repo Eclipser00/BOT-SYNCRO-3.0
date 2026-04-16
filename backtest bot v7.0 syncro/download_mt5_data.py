@@ -23,12 +23,18 @@ import pandas as pd
 # ============================================================
 # TOGGLES (edit these values before running)
 # ============================================================
+<<<<<<< Updated upstream
 START_UTC = "2026-03-16 00:00:00"  # YYYY-MM-DD HH:MM:SS (UTC)
 END_UTC = "2026-04-10 23:59:55"  # YYYY-MM-DD HH:MM:SS (UTC)
 TICKERS = ["JPM","XOM","v","MA","BAC","INTC","PLTR","RTX","WFC","TMUS","AXP","NEE","TXN","T","ADI","DE","BLK","ARAM","HON","BK","NEM","SNDK",
            "COF","VRT","SBUX","CEG","TT","CVS","CMCSA","FCX","NOC","GD","FDX","BK","PWR","JCI","USB","CMI","MMM","CRH","CSX","MCO","SNPS","AEP",
            "KMI","PCAR","MPWR","DLR","TRV","BKR","O","KEYS","TGT","OKE","FANG","CARR","FER","EA","MET","ADSK","FTTB","CMG","EBAY","HSY","PCG",
            "MCHP","NRG","PRU","GEHC","HBAN","HPE","FE","STLD","KHC","CFG","SYF","KEY","FSLR","JBHT","CDE","MRNA"]  # Comma-separated list de simbolos (ej: "EURUSD,GBPUSD,USDJPY")
+=======
+START_UTC = "2026-03-30 00:00:00"  # YYYY-MM-DD HH:MM:SS (UTC)
+END_UTC = "2026-04-10 23:59:55"  # YYYY-MM-DD HH:MM:SS (UTC)
+TICKERS = ["JPM","XOM","V","BAC","MA"]  # Comma-separated list de simbolos (ej: "EURUSD,GBPUSD,USDJPY")
+>>>>>>> Stashed changes
 TIMEFRAME = "M3"  # M1|M3|M5|M15|M30|H1|H4|D1|W1|MN1
 OUTPUT_DIR = "data01"
 DATA_DEVELOPMENT_DIR = "../last_trading_bot_v2.0_pivot_zone_syncro/data_development"
