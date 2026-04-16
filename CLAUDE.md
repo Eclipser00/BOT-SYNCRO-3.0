@@ -20,28 +20,35 @@ Este proyecto usa un sistema de agentes especializados que se ejecutan en orden 
 - Convierte el diagnóstico del EVALUADOR en un plan de acción numerado.
 - No avanza hasta que el usuario valide el plan.
 
-### Paso 4 — WRITER
+### Paso 4 — AUDITORMINIMALISTA
+- Evalúa el plan del PLANEADOR y verifica que la solución propuesta sea la más simple posible.
+- Detecta cambios innecesarios, sobreingeniería o modificaciones que van más allá del mínimo requerido.
+- **Si el plan es minimal y directo** → aprueba y continúa al paso 5.
+- **Si detecta complejidad evitable** → propone una versión reducida del plan y vuelve al **paso 3** para que PLANEADOR lo revise.
+- No modifica código. Solo evalúa el plan.
+
+### Paso 5 — WRITER
 - Ejecuta el plan aprobado. Es el único agente que modifica código.
 - Un paso del plan, un cambio. Confirma con el usuario cuando el plan lo requiera.
 
-### Paso 5 — REFACTORIZADOR
+### Paso 6 — REFACTORIZADOR
 - Revisa el código recién escrito en busca de deuda técnica, código muerto y duplicados.
 - Genera un informe de refactorización validado por el usuario.
-- **Si el usuario aprueba cambios:** WRITER aplica el informe antes de continuar al paso 6.
+- **Si el usuario aprueba cambios:** WRITER aplica el informe antes de continuar al paso 7.
 
-### Paso 6 — TESTER
+### Paso 7 — TESTER
 - Crea tests para los cambios y ejecuta **toda la suite completa**.
-- **Si todos los tests pasan** → continuar al paso 7.
+- **Si todos los tests pasan** → continuar al paso 8.
 - **Si algún test falla** → generar reporte detallado (test, archivo, línea, error, causa) y volver al **paso 2** con ese reporte como entrada.
 
-### Paso 7 — EVALUADORFINAL
+### Paso 8 — EVALUADORFINAL
 - Audita el trabajo de todos los agentes anteriores.
 - Verifica que el código, plan, tests y refactorización son coherentes entre sí.
 - Emite veredicto: APROBADO / CON OBSERVACIONES / REQUIERE CORRECCIÓN.
 - Si hay correcciones → indica qué agente debe intervenir y vuelve al paso correspondiente.
-- Si está aprobado → continuar al paso 8.
+- Si está aprobado → continuar al paso 9.
 
-### Paso 8 — DOCUMENTADOR
+### Paso 9 — DOCUMENTADOR
 - Lee el proyecto completo y genera el `.md` de documentación actualizado.
 - Presenta el documento al usuario para validación antes de guardarlo.
 - Al finalizar, elimina los logs temporales de `/logs`.
@@ -65,6 +72,7 @@ Este proyecto usa un sistema de agentes especializados que se ejecutan en orden 
 | CONTEXTUALIZADOR | Extrae contexto de NotebookLM | No |
 | EVALUADOR | Diagnostica problemas | No |
 | PLANEADOR | Diseña el plan de acción | No |
+| AUDITORMINIMALISTA | Verifica que la solución sea la más simple posible | No |
 | WRITER | Escribe y modifica código | Sí |
 | REFACTORIZADOR | Detecta deuda técnica | No (genera informe) |
 | TESTER | Crea y ejecuta tests | Solo archivos de test |
