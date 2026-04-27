@@ -14,7 +14,13 @@ from bot_trading.application.engine.signals import SignalType
 from bot_trading.application.risk_management import RiskManager
 from bot_trading.application.strategy_registry import StrategyRegistry
 from bot_trading.application.strategies.base import Strategy
-from bot_trading.domain.entities import OrderRequest, SymbolConfig, TradeRecord
+from bot_trading.domain.entities import OrderRequest, Position, SymbolConfig, TradeRecord
+from bot_trading.infrastructure.closed_trades_ledger import (
+    ClosedTradesLedger,
+    dedupe_trades_chronologically,
+    sort_trades_chronologically,
+    trade_record_key,
+)
 from bot_trading.infrastructure.data_fetcher import MarketDataService, DevelopmentCsvDataProvider
 
 logger = logging.getLogger(__name__)
@@ -42,17 +48,28 @@ class TradingBot:
     strategies: list[Strategy]
     symbols: list[SymbolConfig]
     trade_history: list[TradeRecord] = field(default_factory=list)
+    closed_trades_ledger: ClosedTradesLedger | None = None
     strategy_registry: StrategyRegistry = field(default_factory=StrategyRegistry)
     clock_offset: timedelta = field(default=timedelta(0))
     market_data_callback: Callable[[SymbolConfig, dict, datetime], None] | None = None
     _exhausted_symbols: set[str] = field(default_factory=set, init=False)
-    _emitted_close_trade_keys: set[tuple] = field(default_factory=set, init=False)
+    _emitted_close_trade_keys: set[str] = field(default_factory=set, init=False)
 
     def __post_init__(self) -> None:
         """Inicializa el registro de estrategias despuÃ©s de la construcciÃ³n."""
         # Registrar todas las estrategias al iniciar
         for strategy in self.strategies:
             self.strategy_registry.register_strategy(strategy.name)
+        if self.closed_trades_ledger is not None:
+            try:
+                ledger_trades = self.closed_trades_ledger.load()
+                self.trade_history = dedupe_trades_chronologically(
+                    [*ledger_trades, *self.trade_history]
+                )
+            except Exception as exc:
+                logger.warning("No se pudo cargar ledger de trades cerrados: %s", exc)
+        else:
+            self.trade_history = dedupe_trades_chronologically(self.trade_history)
 
     def _now(self) -> datetime:
         """Devuelve la hora actual ajustada por el desfase del broker."""
@@ -64,6 +81,39 @@ class TradingBot:
         if value.tzinfo is None:
             return value.replace(tzinfo=timezone.utc)
         return value.astimezone(timezone.utc)
+
+    def _build_risk_snapshot(self, current_time: datetime) -> tuple[list[TradeRecord], list[Position]] | None:
+        """Construye la foto de riesgo sin depender del ledger cuando hay proveedor MT5."""
+        try:
+            open_positions_getter = getattr(self.broker_client, "get_open_positions", None)
+            open_positions = (
+                list(open_positions_getter() or [])
+                if callable(open_positions_getter)
+                else []
+            )
+
+            risk_provider = getattr(self.broker_client, "get_risk_closed_trades_snapshot", None)
+            if callable(risk_provider):
+                risk_trades = sort_trades_chronologically(
+                    risk_provider(self._ensure_utc_datetime(current_time)) or []
+                )
+            else:
+                risk_trades = sort_trades_chronologically(self.trade_history)
+
+            logger.debug(
+                "Snapshot de riesgo construido: closed_trades=%d open_positions=%d provider=%s",
+                len(risk_trades),
+                len(open_positions),
+                "broker" if callable(risk_provider) else "trade_history",
+            )
+            return risk_trades, open_positions
+        except Exception as exc:
+            logger.error(
+                "No se pudo construir snapshot de riesgo; bloqueando nuevas entradas en este ciclo: %s",
+                exc,
+                exc_info=True,
+            )
+            return None
 
     def sync_clock_with_broker(
         self,
@@ -146,15 +196,24 @@ class TradingBot:
         
         # Actualizar trade_history con trades cerrados del broker
         self._update_trade_history()
+
+        risk_snapshot = self._build_risk_snapshot(current_time)
+        if risk_snapshot is None:
+            return
+        risk_trade_history, risk_open_positions = risk_snapshot
         
-        if not self.risk_manager.check_bot_risk_limits(self.trade_history):
+        if not self.risk_manager.check_bot_risk_limits(risk_trade_history, risk_open_positions):
             logger.warning("Bot bloqueado por lÃ­mites globales de riesgo")
             return
 
         for symbol in self.symbols:
             if symbol.name in self._exhausted_symbols:
                 continue
-            if not self.risk_manager.check_symbol_risk_limits(symbol.name, self.trade_history):
+            if not self.risk_manager.check_symbol_risk_limits(
+                symbol.name,
+                risk_trade_history,
+                risk_open_positions,
+            ):
                 logger.info("SÃ­mbolo %s bloqueado por riesgo", symbol.name)
                 continue
 
@@ -318,7 +377,9 @@ class TradingBot:
 
             for strategy in self.strategies:
                 if not self.risk_manager.check_strategy_risk_limits(
-                    strategy.name, self.trade_history
+                    strategy.name,
+                    risk_trade_history,
+                    risk_open_positions,
                 ):
                     logger.info(
                         "Estrategia %s bloqueada por riesgo", strategy.name
@@ -625,36 +686,6 @@ class TradingBot:
         Prioriza IDs de broker (position_id/deal tickets) para deduplicacion,
         con fallback legacy por tiempos/simbolo/estrategia.
         """
-        def _trade_identity(trade: TradeRecord) -> tuple:
-            if trade.position_id is not None and trade.exit_deal_ticket is not None:
-                return ("position_exit_deal", int(trade.position_id), int(trade.exit_deal_ticket))
-            if trade.exit_deal_ticket is not None:
-                return ("exit_deal", int(trade.exit_deal_ticket))
-            if trade.position_id is not None:
-                return (
-                    "position_exit_time",
-                    int(trade.position_id),
-                    self._ensure_utc_datetime(trade.exit_time).isoformat(),
-                )
-            return (
-                "legacy",
-                self._ensure_utc_datetime(trade.entry_time),
-                self._ensure_utc_datetime(trade.exit_time),
-                trade.symbol,
-                trade.strategy_name,
-            )
-
-        def _close_event_identity(trade: TradeRecord) -> tuple:
-            if trade.position_id is not None and trade.exit_deal_ticket is not None:
-                return ("position_exit_deal", int(trade.position_id), int(trade.exit_deal_ticket))
-            return (
-                "legacy",
-                trade.symbol,
-                self._ensure_utc_datetime(trade.exit_time).isoformat(),
-                round(float(trade.exit_price), 8),
-                round(float(trade.size), 6),
-            )
-
         def _close_order_id(trade: TradeRecord) -> str:
             if trade.exit_deal_ticket is not None:
                 return str(int(trade.exit_deal_ticket))
@@ -665,22 +696,30 @@ class TradingBot:
             return ""
 
         try:
-            closed_trades = self.broker_client.get_closed_trades()
-            existing_trades = {_trade_identity(t) for t in self.trade_history}
+            closed_trades = sort_trades_chronologically(self.broker_client.get_closed_trades())
+            existing_trades = {trade_record_key(t) for t in self.trade_history}
             supports_native_close_events = hasattr(self.broker_client, "consume_closed_position_events")
+            pending_new_trades: list[TradeRecord] = []
             for trade in closed_trades:
-                trade_key = _trade_identity(trade)
+                trade_key = trade_record_key(trade)
                 if trade_key in existing_trades:
                     continue
-
-                self.trade_history.append(trade)
+                pending_new_trades.append(trade)
                 existing_trades.add(trade_key)
+
+            if self.closed_trades_ledger is not None:
+                new_trades = self.closed_trades_ledger.append_new(pending_new_trades)
+            else:
+                new_trades = pending_new_trades
+
+            for trade in new_trades:
+                self.trade_history.append(trade)
                 logger.debug("Trade cerrado agregado al historial: %s", trade)
 
                 if supports_native_close_events:
                     continue
 
-                close_key = _close_event_identity(trade)
+                close_key = trade_record_key(trade)
                 if close_key in self._emitted_close_trade_keys:
                     continue
 
@@ -724,6 +763,11 @@ class TradingBot:
                         "order_id": order_id,
                     }
                 )
+            self.trade_history = dedupe_trades_chronologically(self.trade_history)
+
+            commit_cursor = getattr(self.broker_client, "commit_closed_trades_cursor", None)
+            if callable(commit_cursor):
+                commit_cursor()
         except NotImplementedError:
             # El broker simulado no implementa get_closed_trades
             logger.debug("Broker no soporta get_closed_trades, historial no actualizado")

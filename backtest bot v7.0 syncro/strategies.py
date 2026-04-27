@@ -1132,7 +1132,7 @@ class PivotZoneTestIndicator(_BaseLoggedStrategy):
         return indicators
 '''
 # ================================================================
-# ESTRATEGIA: PivotZoneTest (Zonas pivote: Ruptura + 2 cierres + trailing estructural)
+# ESTRATEGIA: PivotZoneTest (Zonas pivote + break-even estructural por pivote)
 # ================================================================
 # Constante fuera de la clase (requerido por Python para generator expressions)
 _PIVOT_ZONE_MAX = 30
@@ -1167,8 +1167,9 @@ class PivotZoneTest(_BaseLoggedStrategy):
          - TP: orden LÃMITE en el borde mÃ¡s cercano de la zona objetivo (por distancia al precio de entrada).
          - EjecuciÃ³n por â€œtoqueâ€ (por high/low, Backtrader lo simula con orden Limit).
 
-      5) GESTIÃ“N DE SALIDA (SIN TRAILING)
+      5) GESTIÃ“N DE SALIDA (SIN TRAILING CONTINUO)
          - Salida por stop inicial o TP de zona objetivo.
+         - Break-even estructural por pivote una sola vez si TF_stop cruza el entry a favor.
 
     MULTI-TIMEFRAME (IMPORTANTE)
     ----------------------------
@@ -1196,7 +1197,7 @@ class PivotZoneTest(_BaseLoggedStrategy):
         ('n1', 3),          # Multiplicador de min_distance entre zonas (antes fijo en 3.0)
         ('n2', 60),         # Ancho zona % ATR
         ('n3', 3),          # Min pivotes para zona valida
-        ('size_pct', 0.05), # Riesgo/porcentaje (usado por size_percent_by_stop)
+        ('size_pct', 0.1), # Riesgo/porcentaje (usado por size_percent_by_stop)
         ('adaptive_tp', True),
         ('adaptive_tp_min_improvement_pct', 0.25),
     )
@@ -1325,6 +1326,7 @@ class PivotZoneTest(_BaseLoggedStrategy):
         self._active_stop_price: Optional[float] = None
         self._entry_fill_price: Optional[float] = None
         self._active_tp_price: Optional[float] = None
+        self._dynamic_stop_updated: bool = False
 
         print(
             f"[INIT] PivotZoneTest | "
@@ -1530,11 +1532,12 @@ class PivotZoneTest(_BaseLoggedStrategy):
         self._active_stop_price = None
         self._entry_fill_price = None
         self._active_tp_price = None
+        self._dynamic_stop_updated = False
 
     def _replace_stop(self, new_stop_price: float):
         """
-        Reemplaza el stop existente por uno nuevo (trailing estructural).
-        Regla: el stop nunca retrocede.
+        Reemplaza el stop existente por el break-even estructural por pivote.
+        Esta estrategia no hace trailing continuo: solo permite una actualización.
         """
         if self.position.size == 0:
             return
@@ -1564,7 +1567,31 @@ class PivotZoneTest(_BaseLoggedStrategy):
 
         self._active_stop_price = float(new_stop_price)
         dt = self.TF_entry.datetime.datetime(0)
-        print(f"[TRAIL] {dt} | Nuevo STOP={self._active_stop_price:.6f} | dir={self._trade_dir}")
+        print(f"[STRUCTURAL BE STOP] {dt} | Nuevo STOP={self._active_stop_price:.6f} | dir={self._trade_dir}")
+
+    def _maybe_update_dynamic_stop_once(
+        self,
+        pivot_min: Optional[float] = None,
+        pivot_max: Optional[float] = None,
+    ):
+        """Mueve el SL una sola vez al primer pivote de TF_stop que cruza el entry a favor."""
+        if self.position.size == 0:
+            return
+        if self._dynamic_stop_updated:
+            return
+        if self._entry_fill_price is None:
+            return
+
+        if self._trade_dir > 0 and pivot_min is not None:
+            if float(pivot_min) <= float(self._entry_fill_price):
+                return
+            self._replace_stop(float(pivot_min))
+            self._dynamic_stop_updated = True
+        elif self._trade_dir < 0 and pivot_max is not None:
+            if float(pivot_max) >= float(self._entry_fill_price):
+                return
+            self._replace_stop(float(pivot_max))
+            self._dynamic_stop_updated = True
 
     def _maybe_reanchor_tp_on_new_zone(self, new_zone: Optional[Dict[str, float]]):
         if not bool(self.p.adaptive_tp):
@@ -1682,6 +1709,7 @@ class PivotZoneTest(_BaseLoggedStrategy):
                 tp_price = float(self._tp_edge_nearest(self._frozen_zone_target, entry_price))
                 self._entry_fill_price = entry_price
                 self._active_tp_price = tp_price
+                self._dynamic_stop_updated = False
 
                 # Stop (ya estÃ¡ en _active_stop_price)
                 stop_price = float(self._active_stop_price)
@@ -1764,7 +1792,7 @@ class PivotZoneTest(_BaseLoggedStrategy):
 
         B) Si TF_stop avanzÃ³:
            - Actualizar swings (max/min) con max_min_search en TF_stop
-           - Si hay trade abierto: actualizar trailing stop SOLO con swings fuera de zona rota
+           - Si hay trade abierto: aplicar break-even estructural por pivote una sola vez
 
         C) Publicar lÃ­neas de todas las zonas guardadas (plot)
 
@@ -1874,7 +1902,7 @@ class PivotZoneTest(_BaseLoggedStrategy):
             self._prev_valid = current_valid
 
         # ============================================================
-        # B) PROCESAR TF_stop SOLO CUANDO AVANZA (swings + trailing)
+        # B) PROCESAR TF_stop SOLO CUANDO AVANZA (swings + break-even estructural)
         # ============================================================
         tf_stop_len = len(self.TF_stop)
         if tf_stop_len != self._last_tf_stop_len:
@@ -1894,6 +1922,12 @@ class PivotZoneTest(_BaseLoggedStrategy):
                 self._stop_last_min = pivot_min
                 self._stop_pivot_mins.append(float(pivot_min))
                 # print(f"[TF_STOP] Nuevo swing LOW confirmado: {self._stop_last_min:.6f}")
+
+            if self.position.size != 0:
+                self._maybe_update_dynamic_stop_once(
+                    pivot_min=None if math.isnan(pivot_min) else float(pivot_min),
+                    pivot_max=None if math.isnan(pivot_max) else float(pivot_max),
+                )
 
         # ============================================================
         # C) PUBLICAR TODAS LAS ZONAS GUARDADAS (PLOTEO)

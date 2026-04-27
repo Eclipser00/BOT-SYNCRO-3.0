@@ -5,37 +5,36 @@
 
 import os
 import sys
-import subprocess
 
 
-def _reexec_with_project_venv_if_needed() -> None:
-    """Relanza este config.py con el .venv local si VSCode usa otro interprete."""
+def _validate_project_venv_if_needed() -> None:
+    """Exige ejecutar este config.py con el .venv local del proyecto."""
     if __name__ != "__main__":
         return
 
     project_dir = os.path.dirname(os.path.abspath(__file__))
     local_python = os.path.join(project_dir, ".venv", "Scripts", "python.exe")
     if not os.path.isfile(local_python):
-        return
+        print("[config.py] ERROR: no se encontro el interprete esperado del .venv local.", file=sys.stderr)
+        print(f"[config.py] Ruta esperada: {os.path.abspath(local_python)}", file=sys.stderr)
+        raise SystemExit(1)
 
     current_python = os.path.abspath(sys.executable)
     target_python = os.path.abspath(local_python)
     if current_python.lower() == target_python.lower():
         return
 
-    marker_name = "BACKTEST_CONFIG_VENV_REEXEC_DONE"
-    if os.environ.get(marker_name) == "1":
-        return
-
-    print(f"[config.py] Interprete detectado: {current_python}")
-    print(f"[config.py] Reintentando con venv local: {target_python}")
-    env = os.environ.copy()
-    env[marker_name] = "1"
-    result = subprocess.run([target_python, os.path.abspath(__file__), *sys.argv[1:]], env=env)
-    raise SystemExit(result.returncode)
+    print("[config.py] ERROR: interprete incorrecto para este bot.", file=sys.stderr)
+    print(f"[config.py] Interprete actual:   {current_python}", file=sys.stderr)
+    print(f"[config.py] Interprete esperado: {target_python}", file=sys.stderr)
+    print(
+        "[config.py] Selecciona este .venv en VS Code y arranca este config.py con el triangulo de Python.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 
 
-_reexec_with_project_venv_if_needed()
+_validate_project_venv_if_needed()
 
 import numpy as np
 
@@ -81,13 +80,13 @@ param_cols = ['n1', 'n2', 'n3']
 # N3_RANGE = np.arange(50, 250, 50).tolist() # ULTIMO DATO NO SE ITERA
 
 # PIVOT ZONE TEST
-N1_RANGE = np.arange(2, 4, 1).tolist() #  Multiplicador de min_distance entre zonas
-N2_RANGE = np.arange(150, 225, 25).tolist() # Ancho zona % ATR
+N1_RANGE = np.arange(2, 5, 1).tolist() #  Multiplicador de min_distance entre zonas
+N2_RANGE = np.arange(250, 375, 25).tolist() # Ancho zona % ATR
 N3_RANGE = np.arange(4, 7, 1).tolist() # Min pivotes para zona valida
 
 # Timeframes oficiales para PivotZoneTest (minutos)
 PIVOT_TF_ENTRY_MINUTES = 3
-PIVOT_TF_ZONE_MINUTES = 9
+PIVOT_TF_ZONE_MINUTES = 15
 PIVOT_TF_STOP_MINUTES = 3
 
 # ALEATORIO
@@ -115,7 +114,7 @@ PERIODS_PER_YEAR = 175200 # Se utiliza para calcular las métricas de rendimient
 # ==================== EJECUCIÓN ====================
 # Eliminamos Bactesting = True porque ya de por si el programa lo hace.
 # Eliminamos Optimize = True porque siempre estaremos optimizando, cuando solo haya un valor por parametro se pasaran rangos de un valor en la optimizacion.
-OPTIMIZE_MAXIMIZE = 'Profit Factor'
+OPTIMIZE_MAXIMIZE = 'Equity Final [$]'
 
 # Métricas disponibles (puedes usar cualquiera de estas):
 # - 'Equity Final [$]'          → Maximiza

@@ -23,18 +23,108 @@ import pandas as pd
 # ============================================================
 # TOGGLES (edit these values before running)
 # ============================================================
-<<<<<<< Updated upstream
-START_UTC = "2026-03-16 00:00:00"  # YYYY-MM-DD HH:MM:SS (UTC)
-END_UTC = "2026-04-10 23:59:55"  # YYYY-MM-DD HH:MM:SS (UTC)
-TICKERS = ["JPM","XOM","v","MA","BAC","INTC","PLTR","RTX","WFC","TMUS","AXP","NEE","TXN","T","ADI","DE","BLK","ARAM","HON","BK","NEM","SNDK",
-           "COF","VRT","SBUX","CEG","TT","CVS","CMCSA","FCX","NOC","GD","FDX","BK","PWR","JCI","USB","CMI","MMM","CRH","CSX","MCO","SNPS","AEP",
-           "KMI","PCAR","MPWR","DLR","TRV","BKR","O","KEYS","TGT","OKE","FANG","CARR","FER","EA","MET","ADSK","FTTB","CMG","EBAY","HSY","PCG",
-           "MCHP","NRG","PRU","GEHC","HBAN","HPE","FE","STLD","KHC","CFG","SYF","KEY","FSLR","JBHT","CDE","MRNA"]  # Comma-separated list de simbolos (ej: "EURUSD,GBPUSD,USDJPY")
-=======
-START_UTC = "2026-03-30 00:00:00"  # YYYY-MM-DD HH:MM:SS (UTC)
-END_UTC = "2026-04-10 23:59:55"  # YYYY-MM-DD HH:MM:SS (UTC)
-TICKERS = ["JPM","XOM","V","BAC","MA"]  # Comma-separated list de simbolos (ej: "EURUSD,GBPUSD,USDJPY")
->>>>>>> Stashed changes
+START_UTC = "2026-01-26 00:00:00"  # YYYY-MM-DD HH:MM:SS (UTC)
+END_UTC = "2026-04-24 23:59:55"  # YYYY-MM-DD HH:MM:SS (UTC)
+#TICKERS = ["NVDA"]  # Comma-separated list de simbolos (ej: "EURUSD,GBPUSD,USDJPY")
+'''
+# Nasdaq 100
+TICKERS = [
+    "AAPL", "ABNB", "ADBE", "ADI", "ADP", "ADSK", "AEP", "ALNY", "AMAT", "AMD",
+    "AMGN", "ANSS", "APP", "ARM", "ASML", "AXON", "AZN", "BIIB", "BKNG", "BKR",
+    "CCEP", "CDNS", "CDW", "CEG", "CHTR", "CMCSA", "COST", "CPRT", "CRWD", "CSCO",
+    "CSX", "CTAS", "CTSH", "DASH", "DDOG", "DXCM", "EA", "EXC", "FAST", "FER",
+    "FTNT", "GFS", "GILD", "GOOG", "GOOGL", "HON", "IDXX", "ILMN", "INTC", "INTU",
+    "ISRG", "KDP", "KLAC", "KHC", "LIN", "LRCX", "LULU", "MAR", "MCHP", "MDLZ",
+    "MELI", "META", "MNST", "MRVL", "MSFT", "MSTR", "MU", "NFLX", "NVDA", "NXPI",
+    "ODFL", "ON", "ORLY", "PANW", "PAYX", "PCAR", "PDD", "PEP", "PLTR", "PYPL",
+    "QCOM", "REGN", "ROP", "ROST", "SBUX", "SHOP", "SNPS", "STX", "TMUS", "TSLA",
+    "TTD", "TTWO", "TXN", "VRTX", "WBD", "WDAY", "WDC", "XEL", "ZS"
+]
+'''
+
+# Dow Jones
+TICKERS = [
+    "AAPL", "AMGN", "AMZN", "AXP", "BA", "CAT", "CRM", "CSCO", "CVX", "DIS",
+    "GS", "HD", "HON", "IBM", "JNJ", "JPM", "KO", "MCD", "MMM", "MRK",
+    "MSFT", "NKE", "NVDA", "PG", "SHW", "TRV", "UNH", "V", "VZ", "WMT"
+]
+
+'''
+# SP500 tramo 1 (1-100)
+TICKERS = [
+    "A", "AAL", "AAPL", "ABBV", "ABNB", "ABT", "ACGL", "ACN", "ADBE", "ADI",
+    "ADM", "ADP", "ADSK", "AEE", "AEP", "AES", "AFL", "AIG", "AIZ", "AJG",
+    "AKAM", "ALB", "ALGN", "ALL", "ALLE", "AMAT", "AMCR", "AMD", "AME", "AMGN",
+    "AMP", "AMT", "AMZN", "ANET", "ANSS", "AON", "AOS", "APA", "APD", "APH",
+    "APP", "APTV", "ARE", "ATO", "AVB", "AVGO", "AVY", "AWK", "AXON", "AXP",
+    "AZO", "BA", "BAC", "BALL", "BAX", "BBWI", "BBY", "BDX", "BEN", "BF.B",
+    "BG", "BIIB", "BK", "BKNG", "BKR", "BLK", "BMY", "BR", "BRK.B", "BRO",
+    "BSX", "BWA", "BX", "BXP", "C", "CAG", "CAH", "CARR", "CAT", "CB",
+    "CBOE", "CBRE", "CCI", "CCL", "CDNS", "CDW", "CE", "CEG", "CF", "CFG",
+    "CHD", "CHRW", "CHTR", "CI", "CINF", "CL", "CLX", "CMA", "CMCSA", "CME"
+]
+'''
+'''
+# SP500 tramo 2 (101-200)
+TICKERS = [
+    "CMG", "CMI", "CMS", "CNC", "CNP", "COF", "COIN", "COO", "COP", "COR",
+    "COST", "CPAY", "CPB", "CPRT", "CPT", "CRL", "CRM", "CRWD", "CSCO", "CSGP",
+    "CSX", "CTAS", "CTLT", "CTRA", "CTSH", "CTVA", "CVS", "CVX", "CW", "CZR",
+    "D", "DAL", "DAY", "DD", "DE", "DECK", "DELL", "DFS", "DG", "DGX",
+    "DHI", "DHR", "DIS", "DLR", "DLTR", "DOC", "DOV", "DOW", "DPZ", "DRI",
+    "DTE", "DUK", "DVA", "DVN", "DXCM", "EA", "EBAY", "ECL", "ED", "EFX",
+    "EG", "EIX", "EL", "ELV", "EMN", "EMR", "ENPH", "EOG", "EPAM", "EQIX",
+    "EQR", "EQT", "ERIE", "ES", "ESS", "ETN", "ETR", "EVRG", "EW", "EXC",
+    "EXPD", "EXPE", "EXR", "F", "FANG", "FAST", "FCX", "FDS", "FDX", "FE",
+    "FFIV", "FI", "FICO", "FIS", "FITB", "FIX", "FMC", "FOX", "FOXA", "FRT"
+]
+'''
+'''
+# SP500 tramo 3 (201-300)
+TICKERS = [
+    "FTNT", "FTV", "GD", "GE", "GEHC", "GEV", "GILD", "GIS", "GL", "GLW",
+    "GM", "GNRC", "GOOG", "GOOGL", "GPC", "GPN", "GRMN", "GS", "GWW", "HAL",
+    "HAS", "HBAN", "HCA", "HD", "HES", "HIG", "HII", "HLT", "HOLX", "HON",
+    "HPE", "HPQ", "HRL", "HSIC", "HST", "HSY", "HUBB", "HUM", "HWM", "IBM",
+    "ICE", "IDXX", "IEX", "IFF", "ILMN", "INCY", "INTC", "INTU", "INVH", "IP",
+    "IPG", "IQV", "IR", "IRM", "ISRG", "IT", "ITW", "IVZ", "J", "JBHT",
+    "JBL", "JCI", "JKHY", "JNJ", "JNPR", "JPM", "K", "KDP", "KEY", "KEYS",
+    "KHC", "KIM", "KKR", "KLAC", "KMB", "KMI", "KMX", "KO", "KR", "KVUE",
+    "L", "LDOS", "LEN", "LH", "LHX", "LIN", "LKQ", "LLY", "LMT", "LNT",
+    "LOW", "LRCX", "LULU", "LUV", "LVS", "LW", "LYB", "LYV", "MA", "MAA"
+]
+'''
+'''
+# SP500 tramo 4 (301-400)
+TICKERS = [
+    "MAR", "MAS", "MCD", "MCHP", "MCK", "MCO", "MDLZ", "MDT", "MET", "META",
+    "MGM", "MHK", "MKC", "MKTX", "MLM", "MMC", "MMM", "MNST", "MO", "MOH",
+    "MOS", "MPC", "MPWR", "MRK", "MRNA", "MRO", "MS", "MSCI", "MSFT", "MSI",
+    "MTB", "MTCH", "MTD", "MU", "NCLH", "NDAQ", "NDSN", "NEE", "NEM", "NFLX",
+    "NI", "NKE", "NOC", "NOW", "NRG", "NSC", "NTAP", "NTRS", "NUE", "NVDA",
+    "NVR", "NWS", "NWSA", "NXPI", "O", "ODFL", "OKE", "OMC", "ON", "ORCL",
+    "ORLY", "OTIS", "OXY", "PANW", "PARA", "PAYC", "PAYX", "PCAR", "PCG", "PEG",
+    "PEP", "PFE", "PFG", "PG", "PGR", "PH", "PHM", "PKG", "PLD", "PLTR",
+    "PM", "PNC", "PNR", "PNW", "PODD", "POOL", "PPG", "PPL", "PRU", "PSA",
+    "PSX", "PTC", "PWR", "PYPL", "QCOM", "QRVO", "RCL", "REG", "REGN", "RF"
+]
+'''
+'''
+# SP500 tramo 5 (401-500)
+TICKERS = [
+    "RJF", "RL", "RMD", "ROK", "ROL", "ROP", "ROST", "RSG", "RTX", "RVTY",
+    "SBAC", "SBUX", "SCHW", "SHW", "SJM", "SLB", "SMCI", "SNA", "SNPS", "SO",
+    "SOLV", "SPG", "SPGI", "SRE", "STE", "STT", "STX", "STZ", "SW", "SWK",
+    "SWKS", "SYF", "SYY", "T", "TAP", "TDG", "TDY", "TECH", "TEL", "TER",
+    "TFC", "TFX", "TGT", "TJX", "TMO", "TMUS", "TPR", "TRGP", "TRMB", "TROW",
+    "TRV", "TSCO", "TSLA", "TSN", "TT", "TTD", "TTWO", "TXN", "TXT", "TYL",
+    "UAL", "UBER", "UDR", "UHS", "ULTA", "UNH", "UNP", "UPS", "URI", "USB",
+    "V", "VICI", "VLO", "VLTO", "VMC", "VRSK", "VRSN", "VRTX", "VST", "VTR",
+    "VTRS", "VZ", "WAB", "WAT", "WBA", "WBD", "WDC", "WEC", "WELL", "WFC",
+    "WM", "WMB", "WMT", "WRB", "WSM", "WTW", "WY", "WYNN", "XEL", "XOM",
+    "XYL", "YUM", "ZBH", "ZBRA", "ZTS"
+]
+'''
 TIMEFRAME = "M3"  # M1|M3|M5|M15|M30|H1|H4|D1|W1|MN1
 OUTPUT_DIR = "data01"
 DATA_DEVELOPMENT_DIR = "../last_trading_bot_v2.0_pivot_zone_syncro/data_development"

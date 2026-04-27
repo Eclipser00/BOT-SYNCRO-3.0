@@ -17,18 +17,8 @@ logger = logging.getLogger(__name__)
 
 
 def resolve_bot_events_path(root: Path, configured_path: str) -> Path:
-    """Resuelve ruta de eventos local o en carpeta padre, priorizando el mas reciente."""
-    local_path = (root / configured_path).resolve()
-    parent_path = (root.parent / configured_path).resolve()
-
-    local_exists = local_path.exists()
-    parent_exists = parent_path.exists()
-
-    if local_exists and parent_exists:
-        return parent_path if parent_path.stat().st_mtime > local_path.stat().st_mtime else local_path
-    if parent_exists:
-        return parent_path
-    return local_path
+    """Resuelve la ruta de eventos dentro de la raiz del bot."""
+    return (root / configured_path).resolve()
 
 
 @dataclass

@@ -1,0 +1,3 @@
+- [Paridad Backtest-Live PivotZoneTest](project_parity_audit.md) — Auditoria 2026-04-03: datos y zonas identicos; 0 trades backtest vs 69 trades live (divergencia estructural conocida)
+- [Perfil del usuario - Trading Developer](user_role.md) — Desarrollador de bots algoritmicos Python/MT5, estrategia activa PivotZoneTest M3/M9
+- [Diario de Operaciones BOT-SYNCRO 3.0](project_diario_trading.md) — Diario.md cubre 14-15/04/2026; bot_events.jsonl sin datos post-13/04; precios de cierre no disponibles en logs

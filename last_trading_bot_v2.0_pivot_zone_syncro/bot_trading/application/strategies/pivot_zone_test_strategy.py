@@ -19,6 +19,7 @@ from pathlib import Path
 import os
 import json
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 from types import SimpleNamespace
 
@@ -44,7 +45,7 @@ logger = logging.getLogger(__name__)
 pivot_logger = logging.getLogger("pivot_zones")
 
 _TF_ORDER = ["M1", "M3", "M5", "M9", "M15", "M30", "H1", "H4", "D1"]
-_EVENT_LOGGER = EventLogger(str(Path(__file__).resolve().parents[4] / "outputs" / "bot_events.jsonl"))
+_EVENT_LOGGER = EventLogger(str(Path(__file__).resolve().parents[3] / "plots" / "bot_events.jsonl"))
 _INSTRUMENT_SPECS_PATH = Path(__file__).resolve().parents[4] / "shared" / "instrument_specs.json"
 _RISK_FRACTION_SCALE = 0.1
 _RISK_BAND_MIN = 0.8
@@ -218,6 +219,8 @@ class _TradeState:
     sl_order_id: Optional[int] = None
     stop_update_pending: bool = False
     pending_stop_price: Optional[float] = None
+    dynamic_stop_updated: bool = False
+    entry_open_time: Optional[datetime] = None
 
 
 @dataclass
@@ -277,6 +280,8 @@ class PivotZoneTestStrategy:
     _stop_last_max: Dict[str, Optional[float]] = field(default_factory=dict, init=False)
     _stop_pivot_mins: Dict[str, List[float]] = field(default_factory=dict, init=False)
     _stop_pivot_maxs: Dict[str, List[float]] = field(default_factory=dict, init=False)
+    _stop_last_min_event: Dict[str, Optional[Dict[str, Any]]] = field(default_factory=dict, init=False)
+    _stop_last_max_event: Dict[str, Optional[Dict[str, Any]]] = field(default_factory=dict, init=False)
 
     _trade_state: Dict[str, _TradeState] = field(default_factory=dict, init=False)
     _atr_period: int = field(default=14, init=False)
@@ -461,6 +466,10 @@ class PivotZoneTestStrategy:
             self._stop_pivot_mins[symbol] = []
         if symbol not in self._stop_pivot_maxs:
             self._stop_pivot_maxs[symbol] = []
+        if symbol not in self._stop_last_min_event:
+            self._stop_last_min_event[symbol] = None
+        if symbol not in self._stop_last_max_event:
+            self._stop_last_max_event[symbol] = None
 
     def _process_zone_tf(
         self,
@@ -882,9 +891,17 @@ class PivotZoneTestStrategy:
             if pivot_min is not None:
                 last_min = float(pivot_min)
                 self._stop_pivot_mins[symbol].append(last_min)
+                self._stop_last_min_event[symbol] = {
+                    "price": last_min,
+                    "time": df_stop_closed.index[max(0, i - 2)],
+                }
             if pivot_max is not None:
                 last_max = float(pivot_max)
                 self._stop_pivot_maxs[symbol].append(last_max)
+                self._stop_last_max_event[symbol] = {
+                    "price": last_max,
+                    "time": df_stop_closed.index[max(0, i - 2)],
+                }
 
         self._stop_last_min[symbol] = last_min
         self._stop_last_max[symbol] = last_max
@@ -1122,52 +1139,102 @@ class PivotZoneTestStrategy:
 
         return adjusted_lots
 
-    def _update_trailing_stop(self, symbol: str, state: _TradeState) -> None:
-        """Actualiza el stop activo según nuevos pivotes confirmados en TF_stop."""
-        if not state.in_position:
+    @staticmethod
+    def _coerce_timestamp(value: Any) -> Optional[pd.Timestamp]:
+        if value is None:
+            return None
+        try:
+            ts = pd.Timestamp(value)
+        except Exception:
+            return None
+        if pd.isna(ts):
+            return None
+        try:
+            if ts.tzinfo is not None:
+                ts = ts.tz_convert("UTC").tz_localize(None)
+        except Exception:
+            return None
+        return ts
+
+    def _maybe_update_dynamic_stop_once(
+        self,
+        symbol: str,
+        state: _TradeState,
+        open_pos: Any,
+        position_volume: float,
+    ) -> None:
+        """Break-even estructural por pivote: una sola actualización, nunca trailing continuo."""
+        if self.broker_client is None:
             return
-        if state.broken_zone is None:
+        if not state.in_position or state.dynamic_stop_updated:
+            return
+        if open_pos is None or position_volume <= 0.0:
             return
         if state.active_stop is None:
             return
 
-        last_min = self._stop_last_min.get(symbol)
-        last_max = self._stop_last_max.get(symbol)
+        if state.entry_fill_price is None and getattr(open_pos, "entry_price", None) is not None:
+            state.entry_fill_price = float(open_pos.entry_price)
+        if state.entry_open_time is None and getattr(open_pos, "open_time", None) is not None:
+            state.entry_open_time = getattr(open_pos, "open_time")
+
+        if state.direction == 0:
+            open_dir = int(getattr(open_pos, "direction", 0) or 0)
+            if open_dir != 0:
+                state.direction = open_dir
+            elif state.active_tp is not None:
+                state.direction = 1 if float(state.active_tp) > float(state.active_stop) else -1
+
+        entry_price = state.entry_fill_price
+        entry_time = self._coerce_timestamp(state.entry_open_time)
+        if entry_price is None or entry_time is None or state.direction == 0:
+            return
+
+        pivot_event = (
+            self._stop_last_min_event.get(symbol)
+            if state.direction > 0
+            else self._stop_last_max_event.get(symbol)
+        )
+        if not pivot_event:
+            return
+
+        pivot_time = self._coerce_timestamp(pivot_event.get("time"))
+        if pivot_time is None or pivot_time <= entry_time:
+            return
+
+        try:
+            pivot_price = float(pivot_event.get("price"))
+        except Exception:
+            return
 
         if state.direction > 0:
-            if last_min is None:
+            if pivot_price <= float(entry_price):
                 return
-            broken_top = float(state.broken_zone["top"])
-            if float(last_min) > broken_top and float(last_min) > float(state.active_stop):
-                prev_stop = float(state.active_stop)
-                new_stop = float(last_min)
-                state.active_stop = new_stop
-                state.pending_stop_price = new_stop
-                state.stop_update_pending = True
-                logger.info(
-                    "[%s] TRAIL_STOP %s | dir=LONG prev_sl=%.5f new_sl=%.5f",
-                    self.name,
-                    symbol,
-                    prev_stop,
-                    new_stop,
-                )
         else:
-            if last_max is None:
+            if pivot_price >= float(entry_price):
                 return
-            broken_bot = float(state.broken_zone["bot"])
-            if float(last_max) < broken_bot and float(last_max) < float(state.active_stop):
-                prev_stop = float(state.active_stop)
-                new_stop = float(last_max)
-                state.active_stop = new_stop
-                state.pending_stop_price = new_stop
-                state.stop_update_pending = True
-                logger.info(
-                    "[%s] TRAIL_STOP %s | dir=SHORT prev_sl=%.5f new_sl=%.5f",
-                    self.name,
-                    symbol,
-                    prev_stop,
-                    new_stop,
-                )
+
+        if abs(pivot_price - float(state.active_stop)) <= 1e-12:
+            return
+
+        prev_stop = float(state.active_stop)
+        state.pending_stop_price = pivot_price
+        state.stop_update_pending = True
+        updated = self._update_stop_order(symbol, state, position_volume)
+        if not updated:
+            return
+
+        state.dynamic_stop_updated = True
+        logger.info(
+            "[%s] STRUCTURAL_BE_STOP_ONCE %s dir=%s prev_sl=%.5f new_sl=%.5f entry=%.5f pivot_time=%s",
+            self.name,
+            symbol,
+            "LONG" if state.direction > 0 else "SHORT",
+            prev_stop,
+            pivot_price,
+            float(entry_price),
+            pivot_time.isoformat(),
+        )
 
     # -----------------------------
     # Helpers de bracket TP/SL en broker
@@ -1236,7 +1303,7 @@ class PivotZoneTestStrategy:
         state: _TradeState,
         position_volume: float,
     ) -> None:
-        """Crea o recupera TP/SL pendientes en broker y aplica trailing pendiente."""
+        """Crea o recupera TP/SL pendientes en broker y aplica actualización de SL pendiente."""
         if self.broker_client is None:
             return
         if state.active_tp is None or state.active_stop is None:
@@ -1324,16 +1391,16 @@ class PivotZoneTestStrategy:
                 float(state.active_stop),
             )
 
-        # Aplicar trailing pendiente (siguiente vela)
+        # Aplicar actualización estructural pendiente si existe.
         if state.stop_update_pending and state.pending_stop_price is not None:
             self._update_stop_order(symbol, state, position_volume)
 
-    def _update_stop_order(self, symbol: str, state: _TradeState, position_volume: float) -> None:
+    def _update_stop_order(self, symbol: str, state: _TradeState, position_volume: float) -> bool:
         """Actualiza la orden de SL pendiente en broker (modify o cancel+create)."""
         if self.broker_client is None:
-            return
+            return False
         if state.pending_stop_price is None:
-            return
+            return False
         if not self._use_pending_brackets():
             # En MT5 real (hedge), no usar pendientes opuestas como SL para evitar
             # abrir posiciones adicionales. Si el broker soporta SLTP sobre posición,
@@ -1356,10 +1423,10 @@ class PivotZoneTestStrategy:
                         state.active_stop = float(state.pending_stop_price)
                         state.stop_update_pending = False
                         state.pending_stop_price = None
-                        return
+                        return True
                 except Exception as e:
                     logger.warning("[%s] Error actualizando SL de posición en %s: %s", self.name, symbol, e)
-            return
+            return False
         tp_type, sl_type = self._order_types_for_direction(state.direction)
         magic = self._get_magic_number()
         new_price = float(state.pending_stop_price)
@@ -1404,17 +1471,23 @@ class PivotZoneTestStrategy:
                 state.sl_order_id,
             )
             # Paridad/dev: sincronizar stop_loss en FakeBroker para que los cierres SL/TP
-            # usen el trailing actualizado (en MT5 real esto lo gestiona el broker).
+            # usen el SL estructural actualizado (en MT5 real esto lo gestiona el broker).
             try:
-                if hasattr(self.broker_client, "open_positions"):
+                positions = getattr(self.broker_client, "open_positions", None)
+                if positions is None:
+                    positions = getattr(self.broker_client, "positions", None)
+                if positions is not None:
                     magic = self._get_magic_number()
-                    for pos in getattr(self.broker_client, "open_positions", []):
+                    for pos in positions:
                         if getattr(pos, "symbol", None) == symbol and getattr(pos, "magic_number", None) == magic:
                             setattr(pos, "stop_loss", float(new_price))
             except Exception:
                 pass
+            state.active_stop = float(new_price)
             state.stop_update_pending = False
             state.pending_stop_price = None
+            return True
+        return False
 
     # -----------------------------
     # API principal
@@ -1477,18 +1550,30 @@ class PivotZoneTestStrategy:
             open_dir = int(getattr(open_pos, "direction", 0) or 0)
             if open_dir != 0 and state.direction != 0 and open_dir != state.direction:
                 # Reversión implícita detectada en broker (p. ej. doble fill SL/TP en misma vela):
-                # reiniciar estado interno para no arrastrar brackets/trailing de la dirección previa.
+                # reiniciar estado interno para no arrastrar brackets/SL de la dirección previa.
                 state = _TradeState(in_position=True, direction=open_dir)
                 self._trade_state[symbol] = state
             # Recuperar SL/TP y dirección si el estado estaba limpio
             if state.entry_fill_price is None and getattr(open_pos, "entry_price", None) is not None:
                 state.entry_fill_price = float(open_pos.entry_price)
+            if state.entry_open_time is None and getattr(open_pos, "open_time", None) is not None:
+                state.entry_open_time = getattr(open_pos, "open_time")
             if state.active_stop is None and getattr(open_pos, "stop_loss", None) is not None:
                 state.active_stop = float(open_pos.stop_loss)
             if state.active_tp is None and getattr(open_pos, "take_profit", None) is not None:
                 state.active_tp = float(open_pos.take_profit)
             if state.direction == 0 and state.active_tp is not None and state.active_stop is not None:
                 state.direction = 1 if float(state.active_tp) > float(state.active_stop) else -1
+            if (
+                not state.dynamic_stop_updated
+                and state.entry_fill_price is not None
+                and state.active_stop is not None
+                and state.direction != 0
+            ):
+                if state.direction > 0 and float(state.active_stop) > float(state.entry_fill_price):
+                    state.dynamic_stop_updated = True
+                elif state.direction < 0 and float(state.active_stop) < float(state.entry_fill_price):
+                    state.dynamic_stop_updated = True
         else:
             # si no hay posición real, limpiar estado local para mantener consistencia
             if state.in_position:
@@ -1504,17 +1589,14 @@ class PivotZoneTestStrategy:
 
         # 3) Si hay posición: solo gestionar brackets; no generar nuevas señales
         if state.in_position:
-            # Regla actual: sin trailing; solo salida por SL inicial o TP objetivo.
-            state.stop_update_pending = False
-            state.pending_stop_price = None
             pos_volume = float(getattr(open_pos, "volume", 0.0)) if open_pos is not None else 0.0
             if pos_volume > 0 and self._use_pending_brackets():
                 self._ensure_bracket_orders(symbol, state, pos_volume)
+                self._maybe_update_dynamic_stop_once(symbol, state, open_pos, pos_volume)
             elif pos_volume > 0:
                 # Limpieza de pendientes heredadas para evitar sobre-apertura en cuentas hedge.
                 self._cancel_bracket_orders(symbol, state)
-                if state.stop_update_pending and state.pending_stop_price is not None:
-                    self._update_stop_order(symbol, state, pos_volume)
+                self._maybe_update_dynamic_stop_once(symbol, state, open_pos, pos_volume)
             else:
                 logger.debug("[%s] Sin volumen de posición para gestionar bracket en %s", self.name, symbol)
             return signals
@@ -1560,6 +1642,62 @@ class PivotZoneTestStrategy:
                              self.name, symbol, entry_price, stop_price_f, tp_price)
                 return signals
 
+        sig_type = SignalType.BUY if direction > 0 else SignalType.SELL
+        prepare_levels = (
+            getattr(self.broker_client, "prepare_market_order_levels", None)
+            if self.broker_client is not None
+            else None
+        )
+        if callable(prepare_levels):
+            try:
+                prepared_entry, prepared_sl, prepared_tp = prepare_levels(
+                    symbol,
+                    sig_type.value,
+                    stop_price_f,
+                    tp_price,
+                )
+            except Exception as e:
+                logger.warning(
+                    "[%s] Señal descartada: no se pudieron preparar SL/TP de mercado para %s: %s",
+                    self.name,
+                    symbol,
+                    e,
+                )
+                return signals
+
+            if prepared_sl is None:
+                logger.debug("[%s] Señal descartada: SL normalizado no disponible para %s", self.name, symbol)
+                return signals
+            if prepared_tp is None:
+                logger.debug("[%s] Señal descartada: TP normalizado no disponible para %s", self.name, symbol)
+                return signals
+
+            entry_price = float(prepared_entry)
+            stop_price_f = float(prepared_sl)
+            tp_price = float(prepared_tp)
+            if direction > 0:
+                if not (stop_price_f < entry_price < tp_price):
+                    logger.debug(
+                        "[%s] SL/TP normalizados inválidos para LONG %s: entry=%.5f sl=%.5f tp=%.5f",
+                        self.name,
+                        symbol,
+                        entry_price,
+                        stop_price_f,
+                        tp_price,
+                    )
+                    return signals
+            else:
+                if not (tp_price < entry_price < stop_price_f):
+                    logger.debug(
+                        "[%s] SL/TP normalizados inválidos para SHORT %s: entry=%.5f sl=%.5f tp=%.5f",
+                        self.name,
+                        symbol,
+                        entry_price,
+                        stop_price_f,
+                        tp_price,
+                    )
+                    return signals
+
         # Lot size por riesgo (requiere equity + symbol_info)
         lot_size = self._calc_lot_size_by_stop(symbol, entry_price, stop_price_f, params.size_pct)
         if lot_size is None:
@@ -1586,7 +1724,6 @@ class PivotZoneTestStrategy:
             }
         )
 
-        sig_type = SignalType.BUY if direction > 0 else SignalType.SELL
         signals.append(
             Signal(
                 symbol=symbol,
@@ -1604,6 +1741,7 @@ class PivotZoneTestStrategy:
         state.direction = int(direction)
         state.entry_timeframe = self.tf_entry
         state.entry_fill_price = None
+        state.entry_open_time = None
         state.broken_zone = dict(broken_zone)
         state.target_zone = dict(target_zone)
         state.active_stop = float(stop_price_f)
@@ -1612,6 +1750,7 @@ class PivotZoneTestStrategy:
         state.sl_order_id = None
         state.stop_update_pending = False
         state.pending_stop_price = None
+        state.dynamic_stop_updated = False
 
         logger.info(
             "[%s] ENTRADA_SIGNAL %s | entry=%.5f size=%.4f SL=%.5f TP=%.5f | broken=[%.5f, %.5f] target=[%.5f, %.5f]",

@@ -38,6 +38,7 @@ from bot_trading.infrastructure.data_fetcher import (
     DevelopmentCsvDataProvider,
     MarketDataService,
 )
+from bot_trading.infrastructure.closed_trades_ledger import ClosedTradesLedger
 from bot_trading.infrastructure.mt5_client import MetaTrader5Client, MT5ConnectionError
 from bot_trading.visualization.live_plot_service import AutoVisualizerService, resolve_bot_events_path
 
@@ -67,6 +68,19 @@ def _load_instrument_specs() -> dict[str, dict[str, float]]:
         specs[str(symbol).upper()] = normalized
     _INSTRUMENT_SPECS_CACHE = specs
     return specs
+
+
+def _order_request_time_utc(order_request) -> datetime:
+    raw_time = getattr(order_request, "ts_event", None)
+    if raw_time:
+        try:
+            parsed = datetime.fromisoformat(str(raw_time).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except Exception:
+            logger.warning("ts_event invalido en orden simulada, usando reloj UTC: %s", raw_time)
+    return datetime.now(timezone.utc)
 
 
 class FakeBroker:
@@ -127,7 +141,7 @@ class FakeBroker:
                 stop_loss=order_request.stop_loss,
                 take_profit=order_request.take_profit,
                 strategy_name=order_request.comment or "unknown",
-                open_time=datetime.now(timezone.utc),
+                open_time=_order_request_time_utc(order_request),
                 magic_number=order_request.magic_number,
             )
             position.direction = 1 if order_request.order_type == "BUY" else -1  # type: ignore[attr-defined]
@@ -457,11 +471,12 @@ class FakeBroker:
             if getattr(pos, "_pending_close", False):
                 continue
             warmup_bars = int(getattr(pos, "_sltp_warmup_bars", 0) or 0)
+            direction = int(getattr(pos, "direction", 1))
+            pos.profit = (price_close - float(pos.entry_price)) * float(direction) * float(pos.volume)
             if warmup_bars > 0:
                 setattr(pos, "_sltp_warmup_bars", warmup_bars - 1)
                 continue
 
-            direction = int(getattr(pos, "direction", 1))
             sl = pos.stop_loss
             tp = pos.take_profit
 
@@ -618,26 +633,43 @@ def _configure_logging(logging_cfg) -> None:
     )
 
 
+def _resolve_runtime_path(path_value: str) -> Path:
+    path = Path(path_value)
+    if path.is_absolute():
+        return path
+    return (ROOT / path).resolve()
+
+
 # ============================================
-# LIMPIEZA DE OUTPUTS AL INICIAR
+# LIMPIEZA DE PLOTS AL INICIAR
 # Borra archivos generados en ejecuciones anteriores
 # para que cada sesion empiece con un estado limpio.
 # ============================================
-def _clean_outputs() -> None:
-    """Elimina archivos de salida obsoletos del directorio outputs/.
+def _clean_plots() -> None:
+    """Elimina archivos de salida obsoletos del directorio plots/.
 
-    Borra todos los .html para que cada ejecucion comience
-    sin residuos de sesiones anteriores.
+    Borra los HTML y reinicia el JSONL de eventos de la sesion.
+    Conserva el cursor y el ledger persistente de cierres.
     """
-    output_dir = (ROOT / "outputs").resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
+    plots_dir = (ROOT / "plots").resolve()
+    plots_dir.mkdir(parents=True, exist_ok=True)
 
     # Borrar todos los reportes HTML de ejecuciones previas
-    for html_file in output_dir.glob("*.html"):
+    for html_file in plots_dir.glob("*.html"):
         try:
             html_file.unlink(missing_ok=True)
         except Exception:
             pass
+
+    try:
+        (plots_dir / "bot_events.jsonl").write_text("", encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _build_closed_trades_ledger() -> ClosedTradesLedger:
+    ledger_path = _resolve_runtime_path(settings.temporal.closed_trades_ledger_path)
+    return ClosedTradesLedger(ledger_path)
 
 
 def _build_broker():
@@ -654,6 +686,8 @@ def _build_broker():
             closed_trades_overlap_minutes=temporal_cfg.closed_trades_overlap_minutes,
             closed_trades_initial_lookback_hours=temporal_cfg.closed_trades_initial_lookback_hours,
             closed_trades_entry_fallback_days=temporal_cfg.closed_trades_entry_fallback_days,
+            clock_sync_reference_symbols=temporal_cfg.clock_sync_reference_symbols,
+            clock_sync_max_tick_age_seconds=temporal_cfg.clock_sync_max_tick_age_seconds,
         )
         try:
             broker.connect()
@@ -799,9 +833,9 @@ def _build_auto_visualizer(symbols: List[SymbolConfig], broker=None) -> AutoVisu
     else:
         refresh_seconds = 900 if settings.mode == "development" else 900
 
-    output_dir = (ROOT / "outputs").resolve()
+    output_dir = (ROOT / "plots").resolve()
     pivot_log_path = (ROOT / (settings.logging.pivot_log_file_path or "logs/pivot_zones.log")).resolve()
-    bot_events_path = resolve_bot_events_path(ROOT, "outputs/bot_events.jsonl")
+    bot_events_path = resolve_bot_events_path(ROOT, "plots/bot_events.jsonl")
     closed_trades_provider = None
     if broker is not None:
         candidate = getattr(broker, "get_closed_trades_snapshot", None)
@@ -910,7 +944,7 @@ def main() -> None:
     """Ejecuta el bot de trading leyendo toda la configuracion desde config.py."""
     validate_config(settings)
     _configure_logging(settings.logging)
-    _clean_outputs()
+    _clean_plots()
 
     logger.info("=" * 80)
     logger.info("Iniciando Bot de Trading (%s) en modo %s", settings.name, settings.mode)
@@ -923,6 +957,8 @@ def main() -> None:
     strategies = _build_strategies(broker)
     symbols = _build_symbols()
     auto_visualizer = _build_auto_visualizer(symbols, broker=broker)
+    closed_trades_ledger = _build_closed_trades_ledger()
+    initial_trade_history = closed_trades_ledger.load()
 
     bot = TradingBot(
         broker_client=broker,
@@ -931,17 +967,17 @@ def main() -> None:
         order_executor=order_executor,
         strategies=strategies,
         symbols=symbols,
+        trade_history=initial_trade_history,
+        closed_trades_ledger=closed_trades_ledger,
         market_data_callback=(auto_visualizer.on_market_data if auto_visualizer is not None else None),
     )
 
     if settings.broker.use_real_broker:
-        reference_symbol = symbols[0].name if symbols else None
         try:
             clock_sync = bot.sync_clock_with_broker(
                 max_allowed_drift_seconds=2.0,
                 samples=3,
                 sample_sleep_seconds=0.2,
-                reference_symbol=reference_symbol,
             )
             logger.info(
                 "Reloj sincronizado con broker: offset=%.3fs residual=%.3fs samples=%d broker_time=%s",

@@ -1,6 +1,6 @@
 """
 Runner determinista para reproducir el bot en modo desarrollo (CSV) y generar
-`outputs/bot_events.jsonl` para la comparación de paridad.
+`plots/bot_events.jsonl` para la comparación de paridad.
 
 Uso:
     python -m bot_trading.replay_runner

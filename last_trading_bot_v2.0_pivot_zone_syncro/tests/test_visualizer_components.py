@@ -141,13 +141,13 @@ def test_safe_write_html_no_crashea_si_archivo_bloqueado(tmp_path, monkeypatch) 
     assert ok is False
 
 
-def test_resolve_bot_events_path_prioriza_mas_reciente_en_ruta_padre(tmp_path) -> None:
+def test_resolve_bot_events_path_ignora_outputs_de_raiz_padre(tmp_path) -> None:
     repo_root = tmp_path / "repo"
     parent_root = tmp_path
-    (repo_root / "outputs").mkdir(parents=True)
+    (repo_root / "plots").mkdir(parents=True)
     (parent_root / "outputs").mkdir(parents=True, exist_ok=True)
 
-    local_events = repo_root / "outputs" / "bot_events.jsonl"
+    local_events = repo_root / "plots" / "bot_events.jsonl"
     parent_events = parent_root / "outputs" / "bot_events.jsonl"
     local_events.write_text('{"event_type":"local"}\n', encoding="utf-8")
     parent_events.write_text('{"event_type":"parent"}\n', encoding="utf-8")
@@ -156,8 +156,21 @@ def test_resolve_bot_events_path_prioriza_mas_reciente_en_ruta_padre(tmp_path) -
     os.utime(local_events, (1, 1))
     os.utime(parent_events, (2, 2))
 
-    resolved = _resolve_bot_events_path(repo_root, "outputs/bot_events.jsonl")
-    assert resolved == parent_events.resolve()
+    resolved = _resolve_bot_events_path(repo_root, "plots/bot_events.jsonl")
+    assert resolved == local_events.resolve()
+
+
+def test_event_loggers_apuntan_a_plots_del_bot() -> None:
+    from bot_trading.application.engine import order_executor
+    from bot_trading.application.strategies import pivot_zone_test_strategy
+
+    order_path = order_executor._EVENT_LOGGER.path.replace("\\", "/")
+    strategy_path = pivot_zone_test_strategy._EVENT_LOGGER.path.replace("\\", "/")
+
+    assert order_path.endswith("/last_trading_bot_v2.0_pivot_zone_syncro/plots/bot_events.jsonl")
+    assert strategy_path.endswith("/last_trading_bot_v2.0_pivot_zone_syncro/plots/bot_events.jsonl")
+    assert "/outputs/" not in order_path
+    assert "/outputs/" not in strategy_path
 
 
 def test_event_reader_start_from_end_omite_historico_inicial(tmp_path) -> None:

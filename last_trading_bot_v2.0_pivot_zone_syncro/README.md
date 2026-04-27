@@ -1,7 +1,7 @@
 # Bot Live v2.0 — PivotZoneTest Syncro
 
 ## Qué hace
-Bot de trading en vivo que opera zonas pivote multi-timeframe sobre MetaTrader 5. Detecta rupturas de precio sobre zonas construidas con pivotes confirmados de 3 velas, envía órdenes bracket (SL/TP) al broker y gestiona la posición abierta hasta el cierre. Puede correr contra MT5 real o contra un broker simulado (FakeBroker) usando CSVs locales sin modificar una sola línea de código.
+Bot de trading en vivo que opera zonas pivote multi-timeframe sobre MetaTrader 5. Detecta rupturas de precio sobre zonas construidas con pivotes confirmados de 3 velas, abre posiciones con SL/TP estructurales y gestiona la posición abierta hasta el cierre. En MT5 real usa SL/TP nativos sobre la posición; en FakeBroker usa brackets simulados. Puede correr contra MT5 real o contra un broker simulado usando CSVs locales sin modificar una sola línea de código.
 
 ## Stack
 Python 3.x — pandas 2.3.3, numpy 2.2.6, TA-Lib 0.6.8, MetaTrader5 5.0.5430, Bokeh 3.4.1, pytest 9.0.1. Sin ORM ni framework web. Arquitectura propia en capas (domain / application / infrastructure / visualization).
@@ -38,6 +38,7 @@ last_trading_bot_v2.0_pivot_zone_syncro/
 │   │
 │   ├── infrastructure/
 │   │   ├── mt5_client.py             # BrokerClient (Protocol) + MetaTrader5Client: conexión y órdenes MT5
+│   │   ├── closed_trades_ledger.py   # Ledger JSONL persistente de trades cerrados
 │   │   └── data_fetcher.py           # MarketDataService + DevelopmentCsvDataProvider: feeds producción/CSV
 │   │
 │   └── visualization/
@@ -53,9 +54,10 @@ last_trading_bot_v2.0_pivot_zone_syncro/
 │   ├── GBPUSD.csv
 │   └── USDJPY.csv
 │
-├── outputs/
+├── plots/
 │   ├── bot_events.jsonl              # Registro de eventos en vivo (órdenes, fills, posiciones)
 │   ├── closed_trades_cursor.json     # Cursor persistente para no releer deals ya procesados
+│   ├── closed_trades_ledger.jsonl    # Historial persistente de trades cerrados aceptados
 │   └── visualizer*.html             # HTMLs Bokeh generados por símbolo
 │
 ├── logs/
@@ -85,11 +87,13 @@ Arranque (config.py / python -m bot_trading.main)
         ├── _build_risk_manager()         — RiskManager con límites de config.py
         ├── _build_strategies()           — PivotZoneTestStrategy con overrides por símbolo
         ├── _build_auto_visualizer()      — AutoVisualizerService (Bokeh) como callback
+        ├── _build_closed_trades_ledger() — carga historial persistente para eventos/visualizacion
         └── TradingBot.run_synchronized()
             └── [cada cierre de vela M3]
                 └── run_once()
                     ├── order_executor.sync_state()         — sincroniza posiciones con broker
-                    ├── _update_trade_history()             — incorpora trades cerrados
+                    ├── _update_trade_history()             — incorpora trades cerrados al ledger/eventos
+                    ├── _build_risk_snapshot()              — snapshot MT5 para DD: cerradas + PnL abierto
                     ├── risk_manager.check_bot_risk_limits()
                     └── [por cada símbolo]
                         ├── risk_manager.check_symbol_risk_limits()
@@ -112,9 +116,11 @@ TradingBot
 ├── run_synchronized()         — loop principal sincronizado con cierres de vela
 ├── run_once()                 — un ciclo completo: datos → señales → órdenes
 ├── sync_clock_with_broker()   — alinea el reloj local con la hora del broker (mediana de N muestras)
-└── _update_trade_history()    — deduplica y acumula trades cerrados para cálculos de riesgo
+└── _update_trade_history()    — persiste cierres en ledger, ordena historial y confirma cursor
 ```
-Coordina todos los componentes sin contener lógica de negocio. `sync_clock_with_broker` toma N muestras y valida un residual final antes de aplicar el offset, abortando el arranque si el desfase supera el umbral configurado.
+Coordina todos los componentes sin contener lógica de negocio. Al construirse puede cargar `plots/closed_trades_ledger.jsonl` como `trade_history` inicial para conservar eventos, visualizacion y compatibilidad con proveedores sin snapshot historico. En produccion, el riesgo/drawdown no depende de ese ledger local: cada ciclo construye una foto fresca desde MT5 con cierres historicos y posiciones abiertas. `sync_clock_with_broker` toma N muestras y valida un residual final antes de aplicar el offset, abortando el arranque si el desfase supera el umbral configurado.
+
+En producción, la hora del broker se lee desde `MetaTrader5Client.get_server_time()` sin depender del primer símbolo operativo. El cliente consulta una cesta Forex líquida configurada (`EURUSD`, `GBPUSD`, `USDJPY`, `EURGBP`), escoge el tick fresco más reciente y devuelve esa hora para que el motor calcule el offset del broker. Si MT5 entrega timestamps con hora de servidor, por ejemplo UTC+3, la frescura del tick se evalúa compensando un offset horario plausible, pero la hora devuelta se mantiene como hora de broker para conservar la sincronización del loop.
 
 ### order_executor.py — OrderExecutor
 ```
@@ -137,12 +143,12 @@ Contrato inmutable entre estrategias y motor. Ninguna estrategia accede directam
 ### risk_management.py — RiskManager
 ```
 RiskManager
-├── check_bot_risk_limits()       — drawdown global sobre todo el historial
-├── check_symbol_risk_limits()    — drawdown filtrado por símbolo
-├── check_strategy_risk_limits()  — drawdown filtrado por estrategia
+├── check_bot_risk_limits()       — drawdown global sobre cierres + PnL flotante
+├── check_symbol_risk_limits()    — drawdown filtrado por símbolo + PnL flotante
+├── check_strategy_risk_limits()  — drawdown filtrado por estrategia + PnL flotante
 └── check_margin_limits()         — margen usado vs. equity; margen libre vs. orden nueva
 ```
-Bloquea el ciclo completo si se supera `dd_global`, o solo el símbolo/estrategia afectado si el límite es granular. El drawdown se calcula desde `initial_balance` para que las pérdidas desde el arranque se computen correctamente aunque no haya un máximo histórico previo.
+Bloquea el ciclo completo si se supera `dd_global`, o solo el símbolo/estrategia afectado si el límite es granular. El drawdown se calcula desde `initial_balance`, actualiza el pico historico con cada cierre y suma el PnL flotante actual como ultimo punto de equity. Asi, el limite del 30% se evalua contra la cuenta completa aunque una perdida todavia no este cerrada.
 
 ### strategy_registry.py — StrategyRegistry
 ```
@@ -161,15 +167,22 @@ BrokerClient (Protocol)
 ├── send_market_order()
 ├── get_open_positions()
 ├── get_closed_trades()
+├── get_risk_closed_trades_snapshot()
 └── get_account_info()
 
 MetaTrader5Client
 ├── connect()            — inicializa MT5, autentica, valida conexión con reintentos
 ├── get_ohlcv()          — descarga OHLCV con fallback de símbolo y validación de gaps
+├── get_server_time()    — obtiene hora de broker desde la cesta Forex de sincronización
 ├── send_market_order()  — construye request MT5, valida filling mode, maneja errores
-└── get_closed_trades()  — recupera deals con cursor persistente para no releer histórico
+├── get_closed_trades()  — recupera deals incrementales y deja cursor pendiente hasta commit
+└── get_risk_closed_trades_snapshot() — recupera cierres para DD sin cursor/ledger
 ```
-`BrokerClient` es un `Protocol`; cualquier clase que lo satisfaga puede usarse sin herencia. `MetaTrader5Client` implementa reintentos configurables, cache de symbol_info y hardening UTC.
+`BrokerClient` es un `Protocol`; cualquier clase que lo satisfaga puede usarse sin herencia. `MetaTrader5Client` implementa reintentos configurables, cache de symbol_info, hardening UTC y sincronización horaria con referencias Forex. Para `get_server_time()`, prioriza `tick.time_msc` y cae a `tick.time` si no hay milisegundos disponibles. Los ticks sin timestamp o fuera de la ventana de frescura se ignoran; si ninguno sirve, se registra warning y se usa `datetime.now(timezone.utc)` como fallback no bloqueante.
+
+El cursor de cierres no es la memoria completa del bot. `get_closed_trades()` consulta MT5 desde `closed_trades_cursor.json` con solape y reconstruye `TradeRecord`, pero solo prepara un cursor pendiente. `TradingBot._update_trade_history()` escribe primero los trades nuevos en `closed_trades_ledger.jsonl`; despues llama `commit_closed_trades_cursor()` para persistir el cursor de forma atomica. Asi se evita avanzar el cursor antes de guardar el cierre aceptado.
+
+Para drawdown en produccion hay un flujo separado: `get_risk_closed_trades_snapshot()` descubre el primer deal de trading disponible en MT5, cachea esa fecha solo en memoria del proceso y descarga los cierres desde ahi hasta el ciclo actual. No lee ni modifica `closed_trades_cursor.json` ni `closed_trades_ledger.jsonl`. Si MT5 devuelve error o no puede construirse esa foto de riesgo, `TradingBot` bloquea nuevas entradas en ese ciclo en vez de operar con informacion incompleta.
 
 ### data_fetcher.py — MarketDataService / DevelopmentCsvDataProvider
 ```
@@ -203,9 +216,10 @@ generate_signals(data_by_timeframe)
 │   ├── _PivotZoneProject: acumula pivotes hasta n3 → bloquea zona con ancho = ATR(14) * n2/100
 │   └── _saved_zones_by_symbol: lista persistente de zonas válidas separadas por n1 * zone_width
 │
-├── TF_stop (M3) — stop inicial
+├── TF_stop (M3) — stop inicial y break-even estructural
 │   ├── _Pivot3CandleState: pivotes confirmados en TF_stop
-│   └── Stop = último pivot_min (long) o pivot_max (short) previo a la entrada
+│   ├── Stop inicial = último pivot_min (long) o pivot_max (short) previo a la entrada
+│   └── Stop dinámico una sola vez = primer pivot_min > entry (long) o pivot_max < entry (short) posterior a la apertura
 │
 ├── TF_entry (M3) — señal de entrada
 │   ├── Condición: precio cierra fuera del borde de una zona guardada (breakout)
@@ -214,8 +228,9 @@ generate_signals(data_by_timeframe)
 │
 └── Gestión de posición abierta
     ├── TP adaptativo: zona más cercana en dirección del trade (zone-to-zone)
+    ├── Break-even estructural por pivote: una sola actualización de SL, sin trailing continuo
     ├── Si no hay zona destino: fallback a múltiplo del stop
-    └── Cierre delegado al broker via órdenes bracket (SL/TP pendientes); sin cierres intrabar
+    └── Cierre delegado al broker: SL/TP nativos en MT5 real, brackets simulados en FakeBroker; sin cierres intrabar desde la estrategia
 ```
 
 **Zonas pivote.** Una zona nace cuando `n3` o más pivotes de 3 velas en TF_zone caen dentro de un rango de ancho `ATR(14) * n2/100`. Dos zonas no pueden estar a menos de `n1 * zone_width` entre sí; la más nueva desplaza a la anterior. Las zonas se construyen de forma incremental: solo se procesan las barras nuevas desde el último ciclo, sin recalcular toda la historia.
@@ -223,6 +238,8 @@ generate_signals(data_by_timeframe)
 **Breakout de entrada.** Se detecta cuando el precio cierra por encima del borde superior (BUY) o por debajo del borde inferior (SELL) de una zona guardada. La estrategia solo entra si no hay posición abierta para ese símbolo con ese Magic Number. No existe lógica de pirámide.
 
 **Lotaje adaptativo.** El volumen se calcula como `risk_fraction = size_pct * 0.1` del equity, modulado en ±20% según la distancia del stop respecto a un stop de referencia del 1%. Esta modulación mantiene el riesgo real estable aunque la distancia al SL varíe entre operaciones.
+
+**Stop dinámico una sola vez.** No es trailing continuo. Es un break-even estructural por pivote: tras abrirse la posición, BUY mueve el SL al primer `pivot_min` confirmado en `TF_stop` por encima del entry; SELL mueve el SL al primer `pivot_max` confirmado por debajo del entry. Después de esa actualización, el SL no vuelve a moverse durante esa operación.
 
 **TP adaptativo.** El TP apunta a la zona guardada más cercana en la dirección del trade. Si no existe ninguna zona destino, se usa un múltiplo fijo del stop. El TP puede actualizarse si aparece una zona más favorable antes de que el trade cierre.
 
@@ -233,10 +250,10 @@ generate_signals(data_by_timeframe)
 | Conexión | Simulada (`connect()` no hace nada real) | MT5 real con reintentos configurables |
 | Datos OHLCV | Genera serie lineal de prueba; datos reales vienen de CSV vía `DevelopmentCsvDataProvider` | Descarga desde MT5 con validación de gaps y cache de symbol_info |
 | Ejecución de órdenes | Acepta todas; gestiona posiciones en memoria | Envía request a MT5; maneja filling mode y errores de plataforma |
-| Fills de SL/TP | `process_price_tick()` evalúa OHLC de cada vela y dispara cierre inmediato o diferido | MT5 gestiona los fills en la plataforma; el bot los detecta al sincronizar historial de deals |
-| Historial de trades | Lista en memoria; `get_closed_trades()` devuelve copia | Cursor persistente en `outputs/closed_trades_cursor.json`; relectura con solape de 10 min |
+| Fills de SL/TP | `process_price_tick()` evalúa OHLC de cada vela y dispara cierre inmediato o diferido; el SL dinámico actualiza la orden/posición simulada | MT5 gestiona los fills en la plataforma; el SL dinámico se actualiza como SL nativo con `TRADE_ACTION_SLTP` |
+| Historial de trades | Lista en memoria; `get_closed_trades()` devuelve copia y el ledger puede persistir cierres aceptados | Ledger persistente y cursor stage/commit para eventos/dedupe; DD usa snapshot MT5 directo |
 | Credenciales | Ninguna | Variables de entorno `MT5_SERVER`, `MT5_LOGIN`, `MT5_PASSWORD` |
-| Hora del broker | `datetime.now(UTC)` | `get_server_time()` usado para sincronizar offset al arranque |
+| Hora del broker | `datetime.now(UTC)` | `get_server_time()` consulta `EURUSD`, `GBPUSD`, `USDJPY`, `EURGBP` y sincroniza offset al arranque |
 | Margen | `AccountInfo` fijo (equity=20000, margin=0) | Datos reales de la cuenta |
 
 El `BrokerClient` es un `Protocol`, por lo que el resto del sistema no sabe ni le importa cuál de las dos implementaciones está activa. Cambiar de modo es editar `ACTIVE_ENV` en `config.py`.
@@ -252,7 +269,18 @@ RiskManager
                                      o si margen libre < margen requerido por la orden nueva
 ```
 
-El drawdown se calcula sobre el equity acumulado desde `initial_balance`, con pico histórico actualizado trade a trade. Usar `initial_balance` como punto de partida evita subestimar el drawdown cuando el bot arranca con pérdidas (sin pico previo que sirva de referencia).
+El drawdown se calcula sobre el equity acumulado desde `initial_balance`, con pico historico actualizado trade a trade. En produccion, cada ciclo llama al broker para construir una foto de riesgo independiente de la persistencia local:
+
+1. Lee las posiciones abiertas con `get_open_positions()` y toma su `profit` flotante actual.
+2. Lee los trades cerrados con `get_risk_closed_trades_snapshot()`.
+3. `MetaTrader5Client` descubre el primer deal de trading disponible en MT5, cachea esa fecha solo en memoria y descarga los cierres desde ahi hasta `now`.
+4. `RiskManager` ordena los cierres por `exit_time`, acumula PnL desde `initial_balance`, actualiza el pico de equity y suma el PnL flotante como ultimo punto.
+
+El limite global `risk.dd_global=30.0` equivale a bloquear nuevas entradas cuando el maximo drawdown calculado supera el 30%. Los limites por simbolo y estrategia usan el mismo calculo, filtrando cierres y posiciones abiertas por su ambito. Para estrategia, el nombre se normaliza para que comentarios MT5 con sufijo de timeframe, por ejemplo `PivotZoneTest-M3`, sigan emparejando con el limite `PivotZoneTest`.
+
+`plots/closed_trades_cursor.json` y `plots/closed_trades_ledger.jsonl` siguen existiendo, pero no son la fuente de verdad del DD en produccion. El cursor sirve para la lectura incremental de cierres aceptados, deduplicacion y eventos. El ledger conserva cierres aceptados para visualizacion, auditoria y compatibilidad con modos sin snapshot historico. Si se borran por accidente, el calculo de drawdown en produccion se reconstruye igualmente desde MT5 en el siguiente ciclo; lo que puede perderse es informacion local de eventos/visualizacion.
+
+Si MT5 no puede entregar el snapshot de riesgo, el motor no abre operaciones nuevas en ese ciclo. Esto evita que un cursor corrupto, un ledger borrado o un fallo temporal de broker permita operar con un DD desconocido.
 
 **`shared/instrument_specs.json`** es imprescindible para el cálculo de lotaje en FakeBroker y como fallback en MetaTrader5Client. Contiene `trade_tick_value`, `trade_tick_size`, `trade_contract_size`, `volume_min`, `volume_step` y `volume_max` por símbolo. Sin este archivo, la estrategia no puede calcular el volumen correcto en modo desarrollo y cae al mínimo configurable.
 
@@ -285,7 +313,7 @@ El drawdown se calcula sobre el equity acumulado desde `initial_balance`, con pi
 |---|---|---|
 | `strategy.tf_entry` | `M3` | Timeframe de decisión de entrada y gestión interna |
 | `strategy.tf_zone` | `M9` | Timeframe para construir zonas pivote |
-| `strategy.tf_stop` | `M3` | Timeframe para pivotes del stop inicial |
+| `strategy.tf_stop` | `M3` | Timeframe para pivotes del stop inicial y del break-even estructural una sola vez |
 | `strategy.n1` | `3` | Separación mínima entre zonas = `n1 * zone_width` |
 | `strategy.n2` | `100` | Ancho de zona = `ATR(14) * n2/100` |
 | `strategy.n3` | `5` | Pivotes mínimos para bloquear/validar una zona |
@@ -298,7 +326,7 @@ El drawdown se calcula sobre el equity acumulado desde `initial_balance`, con pi
 | `risk.dd_global` | `30.0` | Drawdown máximo global del bot (%) |
 | `risk.dd_por_activo` | `30.0` por símbolo | Drawdown máximo por símbolo (%) |
 | `risk.dd_por_estrategia` | `30.0` por estrategia | Drawdown máximo por estrategia (%) |
-| `risk.initial_balance` | `20000.0` | Balance de referencia para calcular drawdown |
+| `risk.initial_balance` | `100000.0` | Balance de referencia para calcular drawdown |
 | `risk.max_margin_usage_percent` | `80.0` | Porcentaje máximo del equity que puede usarse como margen |
 
 ### Loop y datos
@@ -309,7 +337,7 @@ El drawdown se calcula sobre el equity acumulado desde `initial_balance`, con pi
 | `loop.wait_after_close` | `0` | Segundos de espera tras cierre de vela antes de ejecutar |
 | `loop.skip_sleep_when_simulated` | `True` (dev) / `False` (prod) | Avanza por timestamps CSV sin dormir en desarrollo |
 | `data.data_mode` | `"development"` / `"production"` | Origen de datos: CSV o broker real |
-| `data.bootstrap_lookback_days_zone` | `0` (dev) / `15` (prod) | Días de historia para inicializar zonas al arranque |
+| `data.bootstrap_lookback_days_zone` | `0` (dev) / `30` (prod) | En development replaya desde el inicio del CSV; en production carga historia previa para inicializar zonas |
 | `data.csv_base_timeframe` | `M3` | Timeframe base de los CSVs de desarrollo |
 
 ### Temporal
@@ -317,7 +345,10 @@ El drawdown se calcula sobre el equity acumulado desde `initial_balance`, con pi
 | Parámetro | Valor por defecto | Qué controla |
 |---|---|---|
 | `temporal.strict_utc_mode` | `True` | Normaliza datetimes naive a UTC y emite warnings |
-| `temporal.closed_trades_cursor_path` | `outputs/closed_trades_cursor.json` | Ruta del cursor de historial de deals |
+| `temporal.clock_sync_reference_symbols` | `["EURUSD", "GBPUSD", "USDJPY", "EURGBP"]` | Cesta Forex usada para estimar la hora fresca del broker |
+| `temporal.clock_sync_max_tick_age_seconds` | `120` | Edad máxima aceptada para un tick de sincronización tras compensar offset horario plausible |
+| `temporal.closed_trades_cursor_path` | `plots/closed_trades_cursor.json` | Ruta del cursor de historial de deals |
+| `temporal.closed_trades_ledger_path` | `plots/closed_trades_ledger.jsonl` | Ruta del ledger persistente de trades cerrados aceptados |
 | `temporal.closed_trades_overlap_minutes` | `10` | Solape al releer deals para no perder cierres |
 | `temporal.closed_trades_initial_lookback_hours` | `72` | Ventana inicial si no existe cursor |
 | `temporal.closed_trades_entry_fallback_days` | `7` | Búsqueda histórica de entrada cuando llega un deal de salida sin entrada |
@@ -331,17 +362,22 @@ El drawdown se calcula sobre el equity acumulado desde `initial_balance`, con pi
 | Datos | `DevelopmentCsvDataProvider` (CSV en `data_development/`) | Feed en vivo de MT5 |
 | Loop | Avanza por timestamps del CSV (`skip_sleep_when_simulated=True`) | Espera cierre real de vela M3 |
 | Logging | `DEBUG` — logs detallados a `logs/development.log` | `INFO` — logs a `logs/production.log` |
-| Bootstrap lookback | `0` días (sin historia previa al CSV) | `15` días (inicializa zonas con histórico real) |
+| Bootstrap lookback | `0` días: replay desde el inicio del CSV para comparar con backtest | `30` días: warmup historico real para no arrancar sin zonas |
 | Visualizador | `visualizer_start_from_end=True` (solo eventos nuevos) | `visualizer_start_from_end=False` (carga historial al reiniciar) |
-| Sincronización reloj | No aplica | `sync_clock_with_broker()` obligatoria al arranque; aborta si residual > 2s |
+| Sincronización reloj | No aplica | `sync_clock_with_broker()` usa cesta Forex MT5; warning + reloj local UTC si no hay ticks frescos |
+
+El stop dinámico una sola vez conserva la misma regla en ambos entornos. En development modifica la orden/posición simulada que `process_price_tick()` usa para cerrar por OHLC. En production llama `modify_position_sl_tp()` y MetaTrader recibe un `TRADE_ACTION_SLTP` para actualizar el SL nativo guardado en la posición.
 
 ## Salidas
 
-- `outputs/bot_events.jsonl` — log estructurado de eventos en tiempo real: `order_submit`, `order_fill`, `position`. Usado por el visualizador y para auditoría post-sesión.
-- `outputs/closed_trades_cursor.json` — cursor de producción que recuerda hasta qué deal se ha leído; evita duplicados entre reinicios.
-- `outputs/visualizer{SYMBOL}.html` — gráfico Bokeh interactivo por símbolo con velas OHLCV, zonas pivote superpuestas, marcadores de entrada/salida y niveles SL/TP. Se regenera cada ~15 minutos.
+- `plots/bot_events.jsonl` — log estructurado de eventos en tiempo real: `order_submit`, `order_fill`, `position`. Usado por el visualizador y para auditoría post-sesión.
+- `plots/closed_trades_cursor.json` — cursor de produccion que recuerda hasta que deal incremental se ha confirmado. Se escribe de forma atomica despues de persistir los cierres nuevos. No participa en el calculo de DD de produccion.
+- `plots/closed_trades_ledger.jsonl` — ledger persistente de trades cerrados aceptados. Sirve para visualizacion, auditoria, eventos y compatibilidad con proveedores sin snapshot historico. No es la fuente de verdad del DD de produccion.
+- `plots/visualizer{SYMBOL}.html` — gráfico Bokeh interactivo por símbolo con velas OHLCV, zonas pivote superpuestas, marcadores de entrada/salida y niveles SL/TP. Se regenera cada ~15 minutos.
 - `logs/development.log` / `logs/production.log` — log general del bot con nivel configurable.
 - `logs/pivot_zones.log` — log dedicado de zonas: timestamp de datos, símbolo, nivel de zona y estado (creada / bloqueada / invalidada). Formato minimal para inspección de la lógica de zonas.
+
+`plots/` es la única carpeta de salidas runtime del last trading bot. El bot no debe generar ni leer `outputs/bot_events.jsonl` en la raíz del workspace. El visualizador resuelve eventos dentro de la raíz del bot, sin fallback a la carpeta padre; `_clean_plots()` reinicia `plots/bot_events.jsonl` al arrancar, borra HTMLs antiguos y conserva `plots/closed_trades_cursor.json` y `plots/closed_trades_ledger.jsonl`.
 
 ## Cómo ejecutar
 
@@ -370,7 +406,7 @@ python config.py
 ```
 python -m bot_trading.visualizer
 ```
-Lee `outputs/bot_events.jsonl` y `logs/pivot_zones.log` y genera los HTMLs en `outputs/`.
+Lee `plots/bot_events.jsonl` y `logs/pivot_zones.log` y genera los HTMLs en `plots/`.
 
 **Tests:**
 ```

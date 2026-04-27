@@ -21,9 +21,10 @@ def test_replay_runner_fuerza_modo_development(monkeypatch) -> None:
 
     try:
         replay_runner.run()
+        mode_after_run = config.settings.mode
     finally:
         config.ACTIVE_ENV = original_env
         config.settings = original_settings
 
     assert captured["mode"] == "development"
-    assert config.settings.mode == "development"
+    assert mode_after_run == "development"

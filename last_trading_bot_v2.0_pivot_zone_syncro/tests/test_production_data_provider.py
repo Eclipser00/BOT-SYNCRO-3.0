@@ -43,7 +43,7 @@ def test_production_provider_accumulates_incremental_bars():
     data_first = provider.get_data(symbol, ["M3", "M9"], now)
     len_first = len(data_first["M3"])
 
-    now_later = now + timedelta(minutes=1)
+    now_later = now + timedelta(minutes=3)
     data_second = provider.get_data(symbol, ["M3", "M9"], now_later)
     len_second = len(data_second["M3"])
 

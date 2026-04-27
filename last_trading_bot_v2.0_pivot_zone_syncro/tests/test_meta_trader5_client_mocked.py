@@ -10,7 +10,7 @@ Los tests cubren:
 - Consulta de posiciones y trades
 - Manejo de errores y reconexiones
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, Mock, patch
 
 import pandas as pd
@@ -342,7 +342,7 @@ def test_send_market_order_buy_exitosa(mock_mt5, client):
     mock_mt5.order_send.assert_called_once()
 
 
-def test_send_market_order_buy_ajusta_stops_invalidos(mock_mt5, client):
+def test_prepare_market_order_levels_buy_ajusta_stops_invalidos(mock_mt5, client):
     """BUY con SL/TP demasiado cercanos debe ajustarse antes del envío a MT5."""
     mock_mt5.initialize.return_value = True
     mock_mt5.terminal_info.return_value = Mock()
@@ -370,13 +370,6 @@ def test_send_market_order_buy_ajusta_stops_invalidos(mock_mt5, client):
     mock_tick.bid = 1.30000
     mock_mt5.symbol_info_tick.return_value = mock_tick
 
-    mock_result = Mock()
-    mock_result.retcode = 10009
-    mock_result.order = 555
-    mock_result.volume = 0.03
-    mock_result.price = 1.30020
-    mock_mt5.order_send.return_value = mock_result
-
     client.connect()
 
     order_request = OrderRequest(
@@ -388,15 +381,59 @@ def test_send_market_order_buy_ajusta_stops_invalidos(mock_mt5, client):
         magic_number=777,
     )
 
-    result = client.send_market_order(order_request)
+    entry_price, stop_loss, take_profit = client.prepare_market_order_levels(
+        order_request.symbol,
+        order_request.order_type,
+        order_request.stop_loss,
+        order_request.take_profit,
+    )
 
-    assert result.success is True
-    sent_request = mock_mt5.order_send.call_args[0][0]
-    assert sent_request["sl"] == pytest.approx(1.29979)
-    assert sent_request["tp"] == pytest.approx(1.30021)
+    assert entry_price == pytest.approx(1.30020)
+    assert stop_loss == pytest.approx(1.29979)
+    assert take_profit == pytest.approx(1.30021)
+    mock_mt5.order_send.assert_not_called()
 
 
-def test_send_market_order_omite_sl_si_no_hay_nivel_valido(mock_mt5, client):
+def test_prepare_market_order_levels_sell_ajusta_stops_invalidos(mock_mt5, client):
+    """SELL con SL/TP demasiado cercanos debe ajustarse antes del sizing."""
+    mock_mt5.initialize.return_value = True
+    mock_mt5.terminal_info.return_value = Mock()
+    mock_mt5.account_info.return_value = Mock(login=12345, balance=10000.0)
+
+    mock_symbol_info = Mock()
+    mock_symbol_info.visible = True
+    mock_symbol_info.volume_min = 0.01
+    mock_symbol_info.volume_max = 100.0
+    mock_symbol_info.volume_step = 0.01
+    mock_symbol_info.filling_mode = 1
+    mock_symbol_info.point = 0.00001
+    mock_symbol_info.trade_tick_size = 0.00001
+    mock_symbol_info.digits = 5
+    mock_symbol_info.trade_stops_level = 20
+    mock_symbol_info.trade_freeze_level = 0
+    mock_mt5.symbol_info.return_value = mock_symbol_info
+
+    mock_tick = Mock()
+    mock_tick.ask = 1.30020
+    mock_tick.bid = 1.30000
+    mock_mt5.symbol_info_tick.return_value = mock_tick
+
+    client.connect()
+
+    entry_price, stop_loss, take_profit = client.prepare_market_order_levels(
+        "GBPUSD",
+        "SELL",
+        1.30025,
+        1.30010,
+    )
+
+    assert entry_price == pytest.approx(1.30000)
+    assert stop_loss == pytest.approx(1.30041)
+    assert take_profit == pytest.approx(1.29999)
+    mock_mt5.order_send.assert_not_called()
+
+
+def test_send_market_order_bloquea_stops_invalidos_sin_mutarlos(mock_mt5, client):
     """Si no existe SL positivo válido por distancia mínima, se omite en el request."""
     mock_mt5.initialize.return_value = True
     mock_mt5.terminal_info.return_value = Mock()
@@ -420,16 +457,9 @@ def test_send_market_order_omite_sl_si_no_hay_nivel_valido(mock_mt5, client):
     mock_mt5.TRADE_RETCODE_DONE = 10009
 
     mock_tick = Mock()
-    mock_tick.ask = 0.00022
-    mock_tick.bid = 0.00020
+    mock_tick.ask = 1.30020
+    mock_tick.bid = 1.30000
     mock_mt5.symbol_info_tick.return_value = mock_tick
-
-    mock_result = Mock()
-    mock_result.retcode = 10009
-    mock_result.order = 556
-    mock_result.volume = 0.01
-    mock_result.price = 0.00022
-    mock_mt5.order_send.return_value = mock_result
 
     client.connect()
 
@@ -437,18 +467,18 @@ def test_send_market_order_omite_sl_si_no_hay_nivel_valido(mock_mt5, client):
         symbol="GBPUSD",
         volume=0.01,
         order_type="BUY",
-        stop_loss=0.00010,
-        take_profit=0.00030,
+        stop_loss=1.29995,
+        take_profit=1.30010,
         magic_number=778,
     )
 
     result = client.send_market_order(order_request)
 
-    assert result.success is True
-    sent_request = mock_mt5.order_send.call_args[0][0]
-    assert "sl" not in sent_request
-    assert sent_request["tp"] == pytest.approx(0.00041)
-    assert order_request.stop_loss is None
+    assert result.success is False
+    assert "SL/TP invalidos" in str(result.error_message)
+    assert order_request.stop_loss == pytest.approx(1.29995)
+    assert order_request.take_profit == pytest.approx(1.30010)
+    mock_mt5.order_send.assert_not_called()
 
 
 def test_send_market_order_volumen_invalido_lanza_error(mock_mt5, client):
@@ -674,6 +704,7 @@ def test_get_open_positions_retorna_lista_con_posiciones(mock_mt5, client):
     mock_pos1.comment = "Test Strategy"
     mock_pos1.time = 1704067200
     mock_pos1.magic = 12345
+    mock_pos1.profit = -12.5
     
     mock_pos2 = Mock()
     mock_pos2.symbol = "GBPUSD"
@@ -684,6 +715,7 @@ def test_get_open_positions_retorna_lista_con_posiciones(mock_mt5, client):
     mock_pos2.comment = "Another Strategy"
     mock_pos2.time = 1704067300
     mock_pos2.magic = 54321
+    mock_pos2.profit = 8.0
     
     mock_mt5.positions_get.return_value = [mock_pos1, mock_pos2]
     
@@ -696,7 +728,9 @@ def test_get_open_positions_retorna_lista_con_posiciones(mock_mt5, client):
     assert positions[0].symbol == "EURUSD"
     assert positions[0].volume == 0.1
     assert positions[0].stop_loss == 1.0950
+    assert positions[0].profit == -12.5
     assert positions[1].stop_loss is None  # SL = 0 se convierte a None
+    assert positions[1].profit == 8.0
 
 
 # =============================================================================
@@ -925,6 +959,70 @@ def test_get_closed_trades_snapshot_reconstruye_cross_day_con_fallback(mock_mt5,
     assert client._closed_trades_cursor_time_utc is None
 
 
+def test_get_first_closed_trade_time_descubre_primer_deal_y_cachea(mock_mt5, client, monkeypatch):
+    import bot_trading.infrastructure.mt5_client as mt5_client_mod
+
+    monkeypatch.setattr(
+        mt5_client_mod,
+        "_RISK_HISTORY_DISCOVERY_MIN_UTC",
+        datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    monkeypatch.setattr(
+        mt5_client_mod,
+        "_RISK_HISTORY_DISCOVERY_CHUNK",
+        timedelta(days=2),
+    )
+
+    mock_mt5.initialize.return_value = True
+    mock_mt5.terminal_info.return_value = Mock()
+    mock_mt5.account_info.return_value = Mock(login=12345, balance=10000.0)
+    mock_mt5.DEAL_ENTRY_IN = 0
+    mock_mt5.DEAL_ENTRY_OUT = 1
+
+    first_deal = Mock(
+        position_id=1001,
+        ticket=5001,
+        entry=0,
+        time=int(datetime(2026, 1, 2, 9, 0, tzinfo=timezone.utc).timestamp()),
+    )
+
+    def _history_deals_get(from_utc, to_utc):
+        if from_utc == datetime(2026, 1, 1, tzinfo=timezone.utc):
+            return [first_deal]
+        return []
+
+    mock_mt5.history_deals_get.side_effect = _history_deals_get
+    client.connect()
+
+    to_utc = datetime(2026, 1, 5, tzinfo=timezone.utc)
+    first_time = client.get_first_closed_trade_time(to_utc=to_utc)
+    cached_first_time = client.get_first_closed_trade_time(to_utc=to_utc)
+
+    assert first_time == datetime(2026, 1, 2, 9, 0, tzinfo=timezone.utc)
+    assert cached_first_time == first_time
+    assert mock_mt5.history_deals_get.call_count == 2
+
+
+def test_get_risk_closed_trades_snapshot_no_usa_cursor_y_propaga_error(mock_mt5, client):
+    mock_mt5.initialize.return_value = True
+    mock_mt5.terminal_info.return_value = Mock()
+    mock_mt5.account_info.return_value = Mock(login=12345, balance=10000.0)
+    mock_mt5.DEAL_ENTRY_IN = 0
+    mock_mt5.DEAL_ENTRY_OUT = 1
+    client.connect()
+    client._risk_first_trade_scanned = True
+    client._risk_first_trade_time_utc = datetime(2026, 3, 5, 1, 0, tzinfo=timezone.utc)
+
+    mock_mt5.history_deals_get.return_value = None
+    mock_mt5.last_error.return_value = (999, "boom")
+
+    with pytest.raises(MT5DataError):
+        client.get_risk_closed_trades_snapshot(datetime(2026, 3, 5, 2, 0, tzinfo=timezone.utc))
+
+    assert client._closed_trades_cursor_time_utc is None
+    assert client._closed_trades_cursor_ticket == 0
+
+
 def test_get_closed_trades_out_sin_in_en_ventana_recupera_entry_por_position_id(mock_mt5, client):
     """Si llega OUT sin IN en ventana, fallback por position_id debe recuperar IN."""
     mock_mt5.initialize.return_value = True
@@ -978,8 +1076,8 @@ def test_get_closed_trades_out_sin_in_en_ventana_recupera_entry_por_position_id(
     assert trades[0].exit_deal_ticket == 302
 
 
-def test_get_closed_trades_cursor_persistente_evita_duplicados_tras_reinicio(mock_mt5, tmp_path):
-    """Con cursor persistente, reiniciar cliente no debe duplicar cierres ya emitidos."""
+def test_get_closed_trades_staging_y_commit_evita_duplicados_tras_reinicio(mock_mt5, tmp_path):
+    """get_closed_trades prepara cursor y commit lo persiste para evitar duplicados."""
     cursor_path = tmp_path / "closed_trades_cursor.json"
 
     mock_mt5.initialize.return_value = True
@@ -1026,6 +1124,25 @@ def test_get_closed_trades_cursor_persistente_evita_duplicados_tras_reinicio(moc
     client_1.connect()
     trades_1 = client_1.get_closed_trades()
 
+    assert len(trades_1) == 1
+    assert not cursor_path.exists()
+    assert client_1._closed_trades_cursor_time_utc is None
+    assert client_1._pending_closed_trades_cursor_time_utc == datetime(
+        2026, 3, 5, 2, 0, tzinfo=timezone.utc
+    )
+
+    client_sin_commit = MetaTrader5Client(
+        max_retries=3,
+        retry_delay=0.1,
+        closed_trades_cursor_path=str(cursor_path),
+    )
+    client_sin_commit.connect()
+    trades_sin_commit = client_sin_commit.get_closed_trades()
+
+    assert len(trades_sin_commit) == 1
+
+    client_1.commit_closed_trades_cursor()
+
     client_2 = MetaTrader5Client(
         max_retries=3,
         retry_delay=0.1,
@@ -1034,9 +1151,9 @@ def test_get_closed_trades_cursor_persistente_evita_duplicados_tras_reinicio(moc
     client_2.connect()
     trades_2 = client_2.get_closed_trades()
 
-    assert len(trades_1) == 1
     assert trades_2 == []
     assert cursor_path.exists()
+    assert not (tmp_path / "closed_trades_cursor.json.tmp").exists()
 
 
 def test_strict_utc_mode_normaliza_naive_y_emite_warning(mock_mt5, client, caplog):
@@ -1049,6 +1166,109 @@ def test_strict_utc_mode_normaliza_naive_y_emite_warning(mock_mt5, client, caplo
     assert normalized.tzinfo is not None
     assert normalized.utcoffset() == timezone.utc.utcoffset(normalized)
     assert "Datetime naive detectado y normalizado a UTC" in caplog.text
+
+
+def _mock_visible_symbol_info() -> Mock:
+    symbol_info = Mock()
+    symbol_info.visible = True
+    symbol_info.spread = 1
+    symbol_info.volume_min = 0.01
+    return symbol_info
+
+
+def _mock_tick(*, time_dt: datetime | None = None, time_msc_dt: datetime | None = None) -> Mock:
+    tick = Mock()
+    if time_dt is not None:
+        tick.time = int(time_dt.timestamp())
+    if time_msc_dt is not None:
+        tick.time_msc = int(time_msc_dt.timestamp() * 1000)
+    return tick
+
+
+def test_get_server_time_usa_cesta_forex_y_tick_fresco_mas_reciente(mock_mt5, tmp_path):
+    client = MetaTrader5Client(
+        max_retries=3,
+        retry_delay=0.1,
+        closed_trades_cursor_path=str(tmp_path / "closed_trades_cursor.json"),
+        clock_sync_reference_symbols=["EURUSD", "GBPUSD", "USDJPY", "EURGBP"],
+        clock_sync_max_tick_age_seconds=120,
+    )
+    client.connected = True
+    mock_mt5.terminal_info.return_value = Mock()
+    mock_mt5.symbol_info.return_value = _mock_visible_symbol_info()
+
+    now = datetime.now(timezone.utc)
+    gbp_precise_time = (now - timedelta(seconds=5)).replace(microsecond=123000)
+    ticks = {
+        "EURUSD": _mock_tick(time_dt=now - timedelta(seconds=30)),
+        "GBPUSD": _mock_tick(
+            time_dt=now - timedelta(seconds=70),
+            time_msc_dt=gbp_precise_time,
+        ),
+        "USDJPY": None,
+        "EURGBP": _mock_tick(time_dt=now - timedelta(seconds=300)),
+    }
+
+    def _tick_for(symbol: str):
+        return ticks[symbol]
+
+    mock_mt5.symbol_info_tick.side_effect = _tick_for
+
+    result = client.get_server_time()
+
+    assert result == gbp_precise_time
+    assert [call.args[0] for call in mock_mt5.symbol_info_tick.call_args_list] == [
+        "EURUSD",
+        "GBPUSD",
+        "USDJPY",
+        "EURGBP",
+    ]
+
+
+def test_get_server_time_acepta_tick_fresco_con_offset_horario_broker(mock_mt5, tmp_path):
+    client = MetaTrader5Client(
+        max_retries=3,
+        retry_delay=0.1,
+        closed_trades_cursor_path=str(tmp_path / "closed_trades_cursor.json"),
+        clock_sync_reference_symbols=["EURUSD", "GBPUSD", "USDJPY", "EURGBP"],
+        clock_sync_max_tick_age_seconds=120,
+    )
+    client.connected = True
+    mock_mt5.terminal_info.return_value = Mock()
+    mock_mt5.symbol_info.return_value = _mock_visible_symbol_info()
+
+    now = datetime.now(timezone.utc)
+    broker_offset = timedelta(hours=3)
+    tick_time = now + broker_offset - timedelta(seconds=5)
+    mock_mt5.symbol_info_tick.return_value = _mock_tick(time_dt=tick_time)
+
+    result = client.get_server_time()
+
+    assert result == tick_time.replace(microsecond=0)
+
+
+def test_get_server_time_warning_y_reloj_local_si_todos_los_ticks_son_viejos(mock_mt5, tmp_path, caplog):
+    client = MetaTrader5Client(
+        max_retries=3,
+        retry_delay=0.1,
+        closed_trades_cursor_path=str(tmp_path / "closed_trades_cursor.json"),
+        clock_sync_reference_symbols=["EURUSD", "GBPUSD", "USDJPY", "EURGBP"],
+        clock_sync_max_tick_age_seconds=120,
+    )
+    client.connected = True
+    mock_mt5.terminal_info.return_value = Mock()
+    mock_mt5.symbol_info.return_value = _mock_visible_symbol_info()
+
+    stale_time = datetime.now(timezone.utc) - timedelta(seconds=300)
+    mock_mt5.symbol_info_tick.return_value = _mock_tick(time_dt=stale_time)
+
+    before = datetime.now(timezone.utc)
+    with caplog.at_level("WARNING"):
+        result = client.get_server_time()
+    after = datetime.now(timezone.utc)
+
+    assert before <= result <= after
+    assert "No se pudo obtener tick fresco de referencia MT5" in caplog.text
 
 
 # =============================================================================

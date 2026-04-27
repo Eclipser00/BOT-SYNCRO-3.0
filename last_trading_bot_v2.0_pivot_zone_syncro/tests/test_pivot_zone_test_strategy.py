@@ -119,7 +119,19 @@ class MetaTrader5Client(FakeBrokerClient):
     La estrategia desactiva pendientes opuestas cuando detecta esta clase.
     """
 
+    def __init__(self, equity: float = 10_000.0) -> None:
+        super().__init__(equity=equity)
+        self.sltp_updates = []
+
     def modify_position_sl_tp(self, symbol: str, magic_number=None, stop_loss=None, take_profit=None):
+        self.sltp_updates.append(
+            {
+                "symbol": symbol,
+                "magic_number": magic_number,
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
+            }
+        )
         return SimpleNamespace(success=True, order_id=1)
 
 
@@ -302,7 +314,7 @@ def test_breakout_long_emits_buy_with_tp_sl():
     assert sig.take_profit == pytest.approx(109.0)
 
 
-def test_bracket_created_without_trailing_updates_stop_on_long():
+def test_bracket_updates_structural_be_stop_once_on_long():
     broker = FakeBrokerClient()
     strategy = PivotZoneTestStrategy(
         name="PivotZoneTest",
@@ -333,9 +345,14 @@ def test_bracket_created_without_trailing_updates_stop_on_long():
     state.active_tp = 2.0
     state.broken_zone = {"top": 1.1, "bot": 0.9}
     state.target_zone = {"top": 2.1, "bot": 1.9}
-    # nuevo pivote disponible, pero sin trailing activo no debe mover el SL.
-    strategy._stop_last_min[symbol] = 1.2
-    strategy._stop_pivot_mins[symbol] = [1.0, 1.2]
+    state.entry_open_time = pd.Timestamp("2024-01-01")
+    # No es trailing continuo: es break-even estructural por pivote, una sola vez.
+    strategy._stop_last_min[symbol] = 1.6
+    strategy._stop_pivot_mins[symbol] = [1.0, 1.6]
+    strategy._stop_last_min_event[symbol] = {
+        "price": 1.6,
+        "time": pd.Timestamp("2024-01-01 00:01:00"),
+    }
 
     entry_df = make_df([1.5, 1.5, 1.5], symbol=symbol)
     zone_df = make_df([1.0, 1.0, 1.0], symbol=symbol)
@@ -345,10 +362,201 @@ def test_bracket_created_without_trailing_updates_stop_on_long():
     assert len(broker.pending_orders) == 2
     sl_order = next(o for o in broker.pending_orders if "STOP" in o.order_type)
     tp_order = next(o for o in broker.pending_orders if "LIMIT" in o.order_type)
-    assert sl_order.price == pytest.approx(1.0)
+    assert sl_order.price == pytest.approx(1.6)
     assert tp_order.price == pytest.approx(2.0)
     assert state.stop_update_pending is False
     assert state.pending_stop_price is None
+    assert state.dynamic_stop_updated is True
+    assert broker.positions[0].stop_loss == pytest.approx(1.6)
+
+
+def test_structural_be_stop_long_ignores_pivot_below_entry():
+    broker = FakeBrokerClient()
+    strategy = PivotZoneTestStrategy(
+        name="PivotZoneTest",
+        broker_client=broker,
+        tf_entry="M1",
+        tf_zone="M5",
+        tf_stop="M5",
+    )
+    symbol = "EURUSD"
+    strategy._ensure_symbol_state(symbol)
+    magic = strategy._get_magic_number()
+    broker.positions.append(
+        Position(
+            symbol=symbol,
+            volume=0.2,
+            entry_price=1.5,
+            stop_loss=1.0,
+            take_profit=2.0,
+            strategy_name=strategy.name,
+            open_time=pd.Timestamp("2024-01-01"),
+            magic_number=magic,
+        )
+    )
+    state = strategy._trade_state[symbol]
+    state.in_position = True
+    state.direction = 1
+    state.active_stop = 1.0
+    state.active_tp = 2.0
+    strategy._stop_last_min_event[symbol] = {
+        "price": 1.4,
+        "time": pd.Timestamp("2024-01-01 00:01:00"),
+    }
+
+    signals = strategy.generate_signals(
+        {"M1": make_df([1.5, 1.5, 1.5], symbol=symbol), "M5": make_df([1.0, 1.0, 1.0], symbol=symbol)}
+    )
+    assert signals == []
+    sl_order = next(o for o in broker.pending_orders if "STOP" in o.order_type)
+    assert sl_order.price == pytest.approx(1.0)
+    assert state.dynamic_stop_updated is False
+
+
+def test_structural_be_stop_updates_once_on_short():
+    broker = FakeBrokerClient()
+    strategy = PivotZoneTestStrategy(
+        name="PivotZoneTest",
+        broker_client=broker,
+        tf_entry="M1",
+        tf_zone="M5",
+        tf_stop="M5",
+    )
+    symbol = "EURUSD"
+    strategy._ensure_symbol_state(symbol)
+    magic = strategy._get_magic_number()
+    broker.positions.append(
+        Position(
+            symbol=symbol,
+            volume=0.2,
+            entry_price=1.5,
+            stop_loss=2.0,
+            take_profit=1.0,
+            strategy_name=strategy.name,
+            open_time=pd.Timestamp("2024-01-01"),
+            magic_number=magic,
+        )
+    )
+    state = strategy._trade_state[symbol]
+    state.in_position = True
+    state.direction = -1
+    state.active_stop = 2.0
+    state.active_tp = 1.0
+    strategy._stop_last_max_event[symbol] = {
+        "price": 1.4,
+        "time": pd.Timestamp("2024-01-01 00:01:00"),
+    }
+
+    signals = strategy.generate_signals(
+        {"M1": make_df([1.5, 1.5, 1.5], symbol=symbol), "M5": make_df([1.0, 1.0, 1.0], symbol=symbol)}
+    )
+    assert signals == []
+    sl_order = next(o for o in broker.pending_orders if "STOP" in o.order_type)
+    assert sl_order.price == pytest.approx(1.4)
+    assert state.dynamic_stop_updated is True
+
+    strategy._stop_last_max_event[symbol] = {
+        "price": 1.3,
+        "time": pd.Timestamp("2024-01-01 00:02:00"),
+    }
+    strategy.generate_signals(
+        {"M1": make_df([1.5, 1.5, 1.5, 1.5], symbol=symbol), "M5": make_df([1.0, 1.0, 1.0, 1.0], symbol=symbol)}
+    )
+    sl_order = next(o for o in broker.pending_orders if "STOP" in o.order_type)
+    assert sl_order.price == pytest.approx(1.4)
+
+
+def test_structural_be_stop_short_ignores_pivot_above_entry():
+    broker = FakeBrokerClient()
+    strategy = PivotZoneTestStrategy(
+        name="PivotZoneTest",
+        broker_client=broker,
+        tf_entry="M1",
+        tf_zone="M5",
+        tf_stop="M5",
+    )
+    symbol = "EURUSD"
+    strategy._ensure_symbol_state(symbol)
+    magic = strategy._get_magic_number()
+    broker.positions.append(
+        Position(
+            symbol=symbol,
+            volume=0.2,
+            entry_price=1.5,
+            stop_loss=2.0,
+            take_profit=1.0,
+            strategy_name=strategy.name,
+            open_time=pd.Timestamp("2024-01-01"),
+            magic_number=magic,
+        )
+    )
+    state = strategy._trade_state[symbol]
+    state.in_position = True
+    state.direction = -1
+    state.active_stop = 2.0
+    state.active_tp = 1.0
+    strategy._stop_last_max_event[symbol] = {
+        "price": 1.6,
+        "time": pd.Timestamp("2024-01-01 00:01:00"),
+    }
+
+    signals = strategy.generate_signals(
+        {"M1": make_df([1.5, 1.5, 1.5], symbol=symbol), "M5": make_df([1.0, 1.0, 1.0], symbol=symbol)}
+    )
+    assert signals == []
+    sl_order = next(o for o in broker.pending_orders if "STOP" in o.order_type)
+    assert sl_order.price == pytest.approx(2.0)
+    assert state.dynamic_stop_updated is False
+
+
+def test_structural_be_stop_updates_native_mt5_position():
+    broker = MetaTrader5Client()
+    strategy = PivotZoneTestStrategy(
+        name="PivotZoneTest",
+        broker_client=broker,
+        tf_entry="M1",
+        tf_zone="M5",
+        tf_stop="M5",
+    )
+    symbol = "EURUSD"
+    strategy._ensure_symbol_state(symbol)
+    magic = strategy._get_magic_number()
+    broker.positions.append(
+        Position(
+            symbol=symbol,
+            volume=0.2,
+            entry_price=1.5,
+            stop_loss=1.0,
+            take_profit=2.0,
+            strategy_name=strategy.name,
+            open_time=pd.Timestamp("2024-01-01"),
+            magic_number=magic,
+        )
+    )
+    state = strategy._trade_state[symbol]
+    state.in_position = True
+    state.direction = 1
+    state.active_stop = 1.0
+    state.active_tp = 2.0
+    strategy._stop_last_min_event[symbol] = {
+        "price": 1.6,
+        "time": pd.Timestamp("2024-01-01 00:01:00"),
+    }
+
+    signals = strategy.generate_signals(
+        {"M1": make_df([1.5, 1.5, 1.5], symbol=symbol), "M5": make_df([1.0, 1.0, 1.0], symbol=symbol)}
+    )
+    assert signals == []
+    assert broker.pending_orders == []
+    assert broker.sltp_updates == [
+        {
+            "symbol": symbol,
+            "magic_number": magic,
+            "stop_loss": pytest.approx(1.6),
+            "take_profit": pytest.approx(2.0),
+        }
+    ]
+    assert state.dynamic_stop_updated is True
 
 
 def test_adaptive_tp_reanchors_long_to_intermediate_zone():
@@ -680,6 +888,33 @@ def test_symbol_size_override_changes_lot_size():
     assert base_size == pytest.approx(1.53, rel=1e-3)
     assert override_signals[0].size == pytest.approx(3.07, rel=1e-3)
     assert override_signals[0].size > base_size
+
+
+def test_prepared_market_levels_are_used_before_lot_size():
+    strategy, broker, data = build_breakout_context()
+
+    def prepare_market_order_levels(symbol, order_type, stop_loss, take_profit):
+        assert symbol == "EURUSD"
+        assert order_type == "BUY"
+        assert stop_loss == pytest.approx(99.0)
+        assert take_profit == pytest.approx(109.0)
+        return 102.0, 100.0, 109.0
+
+    broker.prepare_market_order_levels = prepare_market_order_levels
+
+    signals = strategy.generate_signals(data)
+
+    assert signals, "La estrategia debe generar senal con niveles preparados"
+    signal = signals[0]
+    expected_size = strategy._calc_lot_size_by_stop(
+        "EURUSD",
+        entry_price=102.0,
+        stop_price=100.0,
+        size_pct=0.05,
+    )
+    assert signal.stop_loss == pytest.approx(100.0)
+    assert signal.take_profit == pytest.approx(109.0)
+    assert signal.size == pytest.approx(expected_size)
 
 
 def test_lot_size_uses_stop_risk_without_cap_nocional():

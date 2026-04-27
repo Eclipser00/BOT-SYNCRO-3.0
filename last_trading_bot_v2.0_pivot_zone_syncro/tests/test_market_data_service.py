@@ -184,6 +184,125 @@ def test_production_drop_last_partial_removes_incomplete_candle() -> None:
     assert len(result["M5"]) <= len(resample_sin_drop)
 
 
+def test_production_base_timeframe_drops_open_m3_candle() -> None:
+    """La vela base M3 abierta no debe llegar a la estrategia en production."""
+
+    class FixedM3Broker(FakeBrokerSpy):
+        def get_ohlcv(
+            self, symbol: str, timeframe: str, start: datetime, end: datetime
+        ) -> pd.DataFrame:
+            self.calls.append(
+                {"symbol": symbol, "timeframe": timeframe, "start": start, "end": end}
+            )
+            base = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
+            index = pd.date_range(start=base, periods=3, freq="3min", tz=timezone.utc)
+            data = {
+                "open": [1.0, 2.0, 3.0],
+                "high": [1.0, 2.0, 3.0],
+                "low": [1.0, 2.0, 3.0],
+                "close": [1.0, 2.0, 3.0],
+                "volume": [1, 1, 1],
+            }
+            return pd.DataFrame(data, index=index)
+
+    broker = FixedM3Broker()
+    provider = ProductionDataProvider(
+        broker, lookback_days_entry=1, lookback_days_zone=1, lookback_days_stop=1
+    )
+    symbol = SymbolConfig(name="EURUSD", min_timeframe="M3")
+
+    result = provider.get_data(
+        symbol,
+        ["M3"],
+        datetime(2024, 1, 1, 0, 3, 2, tzinfo=timezone.utc),
+    )
+
+    assert list(result["M3"].index) == [
+        pd.Timestamp("2024-01-01 00:00:00", tz=timezone.utc)
+    ]
+
+
+def test_production_base_timeframe_keeps_m3_after_close() -> None:
+    """La vela M3 abierta a las 00:03 queda disponible desde su cierre."""
+
+    class FixedM3Broker(FakeBrokerSpy):
+        def get_ohlcv(
+            self, symbol: str, timeframe: str, start: datetime, end: datetime
+        ) -> pd.DataFrame:
+            self.calls.append(
+                {"symbol": symbol, "timeframe": timeframe, "start": start, "end": end}
+            )
+            base = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
+            index = pd.date_range(start=base, periods=3, freq="3min", tz=timezone.utc)
+            data = {
+                "open": [1.0, 2.0, 3.0],
+                "high": [1.0, 2.0, 3.0],
+                "low": [1.0, 2.0, 3.0],
+                "close": [1.0, 2.0, 3.0],
+                "volume": [1, 1, 1],
+            }
+            return pd.DataFrame(data, index=index)
+
+    broker = FixedM3Broker()
+    provider = ProductionDataProvider(
+        broker, lookback_days_entry=1, lookback_days_zone=1, lookback_days_stop=1
+    )
+    symbol = SymbolConfig(name="EURUSD", min_timeframe="M3")
+
+    result = provider.get_data(
+        symbol,
+        ["M3"],
+        datetime(2024, 1, 1, 0, 6, 0, tzinfo=timezone.utc),
+    )
+
+    assert list(result["M3"].index) == [
+        pd.Timestamp("2024-01-01 00:00:00", tz=timezone.utc),
+        pd.Timestamp("2024-01-01 00:03:00", tz=timezone.utc),
+    ]
+
+
+def test_production_resamples_higher_timeframe_from_closed_base_only() -> None:
+    """M9 debe construirse sin usar velas M3 abiertas."""
+
+    class FixedM3Broker(FakeBrokerSpy):
+        def get_ohlcv(
+            self, symbol: str, timeframe: str, start: datetime, end: datetime
+        ) -> pd.DataFrame:
+            self.calls.append(
+                {"symbol": symbol, "timeframe": timeframe, "start": start, "end": end}
+            )
+            base = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
+            index = pd.date_range(start=base, periods=4, freq="3min", tz=timezone.utc)
+            data = {
+                "open": [1.0, 2.0, 3.0, 4.0],
+                "high": [1.0, 2.0, 3.0, 4.0],
+                "low": [1.0, 2.0, 3.0, 4.0],
+                "close": [1.0, 2.0, 3.0, 4.0],
+                "volume": [1, 1, 1, 1],
+            }
+            return pd.DataFrame(data, index=index)
+
+    broker = FixedM3Broker()
+    provider = ProductionDataProvider(
+        broker, lookback_days_entry=1, lookback_days_zone=1, lookback_days_stop=1
+    )
+    symbol = SymbolConfig(name="EURUSD", min_timeframe="M3")
+
+    result = provider.get_data(
+        symbol,
+        ["M3", "M9"],
+        datetime(2024, 1, 1, 0, 9, 2, tzinfo=timezone.utc),
+    )
+
+    assert list(result["M3"].index) == [
+        pd.Timestamp("2024-01-01 00:00:00", tz=timezone.utc),
+        pd.Timestamp("2024-01-01 00:03:00", tz=timezone.utc),
+        pd.Timestamp("2024-01-01 00:06:00", tz=timezone.utc),
+    ]
+    assert pd.Timestamp("2024-01-01 00:09:00", tz=timezone.utc) not in result["M9"].index
+    assert 4.0 not in result["M9"]["close"].tolist()
+
+
 def test_production_raises_value_error_for_unsupported_timeframe(
     fake_broker_spy: FakeBrokerSpy,
 ) -> None:

@@ -12,7 +12,7 @@ from bot_trading.infrastructure.mt5_client import BrokerClient
 from bot_trading.application.utils.event_logger import EventLogger
 
 logger = logging.getLogger(__name__)
-_EVENT_LOGGER = EventLogger(str(Path(__file__).resolve().parents[4] / "outputs" / "bot_events.jsonl"))
+_EVENT_LOGGER = EventLogger(str(Path(__file__).resolve().parents[3] / "plots" / "bot_events.jsonl"))
 
 
 @dataclass
@@ -57,6 +57,13 @@ class OrderExecutor:
             except Exception:
                 logger.warning("ts_event invalido, usando fallback UTC: %s", ts_event)
         return self._ensure_utc_datetime(fallback_now or self._now_utc()).isoformat()
+
+    def _position_open_time(self, order_request: OrderRequest) -> datetime:
+        try:
+            parsed = datetime.fromisoformat(self._normalize_ts_event(order_request.ts_event))
+            return self._ensure_utc_datetime(parsed)
+        except Exception:
+            return self._now_utc()
 
     def _resolve_fill_price(self, order_request: OrderRequest, result: OrderResult) -> float:
         """Obtiene el mejor precio disponible para eventos de fill."""
@@ -266,7 +273,7 @@ class OrderExecutor:
             stop_loss=order_request.stop_loss,
             take_profit=order_request.take_profit,
             strategy_name=order_request.comment or "unknown",
-            open_time=self._now_utc(),
+            open_time=self._position_open_time(order_request),
             magic_number=order_request.magic_number,
         )
         # Usar símbolo + magic_number como clave para consistencia

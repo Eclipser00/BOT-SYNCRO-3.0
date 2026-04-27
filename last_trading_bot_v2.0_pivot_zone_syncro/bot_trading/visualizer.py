@@ -19,9 +19,9 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Sleep entre ciclos de ingesta (segundos). Por defecto: 0 dev, 60 prod.",
     )
-    parser.add_argument("--output-html", default="outputs/visualizer_m3.html", help="Ruta del HTML de salida")
+    parser.add_argument("--output-html", default="plots/visualizer_m3.html", help="Ruta del HTML de salida")
     parser.add_argument("--pivot-log", default="logs/pivot_zones.log", help="Ruta del log de zonas pivote")
-    parser.add_argument("--bot-events", default="outputs/bot_events.jsonl", help="Ruta del JSONL de eventos del bot")
+    parser.add_argument("--bot-events", default="plots/bot_events.jsonl", help="Ruta del JSONL de eventos del bot")
     parser.add_argument(
         "--max-candles",
         type=int,

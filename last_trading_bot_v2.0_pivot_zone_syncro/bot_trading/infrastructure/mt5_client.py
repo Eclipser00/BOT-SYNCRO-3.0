@@ -38,6 +38,9 @@ from bot_trading.domain.entities import (
 # ConfiguraciÃ³n de logging
 logger = logging.getLogger(__name__)
 
+_RISK_HISTORY_DISCOVERY_MIN_UTC = datetime(2000, 1, 1, tzinfo=timezone.utc)
+_RISK_HISTORY_DISCOVERY_CHUNK = timedelta(days=366)
+
 
 # =============================================================================
 # EXCEPCIONES CUSTOM
@@ -92,6 +95,9 @@ class BrokerClient(Protocol):
 
     def get_closed_trades(self) -> list[TradeRecord]:
         """Recupera trades cerrados recientes."""
+
+    def get_risk_closed_trades_snapshot(self, to_utc: datetime | None = None) -> list[TradeRecord]:
+        """Recupera cierres para calculo de riesgo sin usar cursor local."""
 
     def get_account_info(self) -> AccountInfo:
         """Obtiene informaciÃ³n de cuenta del broker."""
@@ -154,6 +160,8 @@ TIMEFRAME_MAP = {
     "MN1": mt5.TIMEFRAME_MN1,
 }
 
+DEFAULT_CLOCK_SYNC_REFERENCE_SYMBOLS = ("EURUSD", "GBPUSD", "USDJPY", "EURGBP")
+
 
 # =============================================================================
 # CLIENTE METATRADER 5
@@ -180,10 +188,12 @@ class MetaTrader5Client:
         retry_delay: float = 1.0,
         *,
         strict_utc_mode: bool = True,
-        closed_trades_cursor_path: str = "outputs/closed_trades_cursor.json",
+        closed_trades_cursor_path: str = "plots/closed_trades_cursor.json",
         closed_trades_overlap_minutes: int = 10,
         closed_trades_initial_lookback_hours: int = 72,
         closed_trades_entry_fallback_days: int = 7,
+        clock_sync_reference_symbols: list[str] | tuple[str, ...] | None = None,
+        clock_sync_max_tick_age_seconds: int = 120,
     ) -> None:
         """Inicializa el cliente MT5.
 
@@ -199,17 +209,28 @@ class MetaTrader5Client:
         self.closed_trades_overlap_minutes: int = max(0, int(closed_trades_overlap_minutes))
         self.closed_trades_initial_lookback_hours: int = max(1, int(closed_trades_initial_lookback_hours))
         self.closed_trades_entry_fallback_days: int = max(1, int(closed_trades_entry_fallback_days))
+        raw_reference_symbols = clock_sync_reference_symbols or DEFAULT_CLOCK_SYNC_REFERENCE_SYMBOLS
+        self.clock_sync_reference_symbols: list[str] = self._dedupe_symbols(raw_reference_symbols)
+        if not self.clock_sync_reference_symbols:
+            self.clock_sync_reference_symbols = list(DEFAULT_CLOCK_SYNC_REFERENCE_SYMBOLS)
+        self.clock_sync_max_tick_age_seconds: int = max(1, int(clock_sync_max_tick_age_seconds))
         self._closed_trades_cursor_path: Path = self._resolve_runtime_path(closed_trades_cursor_path)
         self._closed_trades_cursor_time_utc: datetime | None = None
         self._closed_trades_cursor_ticket: int = 0
-        self._closed_trade_dedupe_keys: set[tuple[int, int]] = set()
+        self._pending_closed_trades_cursor_time_utc: datetime | None = None
+        self._pending_closed_trades_cursor_ticket: int = 0
+        self._risk_first_trade_time_utc: datetime | None = None
+        self._risk_first_trade_scanned: bool = False
         self._load_closed_trades_cursor()
 
         logger.info(
-            "MetaTrader5Client inicializado max_retries=%d retry_delay=%.2f strict_utc_mode=%s cursor=%s",
+            "MetaTrader5Client inicializado max_retries=%d retry_delay=%.2f strict_utc_mode=%s "
+            "clock_refs=%s max_tick_age=%ss cursor=%s",
             max_retries,
             retry_delay,
             self.strict_utc_mode,
+            ",".join(self.clock_sync_reference_symbols),
+            self.clock_sync_max_tick_age_seconds,
             self._closed_trades_cursor_path,
         )
 
@@ -277,6 +298,49 @@ class MetaTrader5Client:
         return value.astimezone(timezone.utc)
 
     @staticmethod
+    def _dedupe_symbols(symbols: list[str] | tuple[str, ...]) -> list[str]:
+        result: list[str] = []
+        for symbol in symbols:
+            symbol_value = str(symbol).strip()
+            if symbol_value and symbol_value not in result:
+                result.append(symbol_value)
+        return result
+
+    def _server_time_candidates(self, symbol: Optional[str] = None) -> list[str]:
+        candidates: list[str] = []
+        if symbol:
+            candidates.append(symbol)
+        else:
+            candidates.extend(self.clock_sync_reference_symbols)
+        candidates.extend(self._symbol_info_cache.keys())
+        candidates.append("EURUSD")
+        return self._dedupe_symbols(tuple(candidates))
+
+    @staticmethod
+    def _tick_time_utc(tick: object) -> datetime | None:
+        for attr_name, divisor in (("time_msc", 1000.0), ("time", 1.0)):
+            raw_value = getattr(tick, attr_name, None)
+            if raw_value is None:
+                continue
+            try:
+                timestamp = float(raw_value) / divisor
+            except (TypeError, ValueError):
+                continue
+            if timestamp <= 0:
+                continue
+            return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+        return None
+
+    @staticmethod
+    def _tick_age_seconds(now_utc: datetime, tick_time: datetime) -> float:
+        raw_delta_seconds = (tick_time - now_utc).total_seconds()
+        direct_age_seconds = abs(raw_delta_seconds)
+        inferred_offset_seconds = round(raw_delta_seconds / 3600) * 3600
+        if inferred_offset_seconds and abs(inferred_offset_seconds) <= 14 * 3600:
+            return abs(raw_delta_seconds - inferred_offset_seconds)
+        return direct_age_seconds
+
+    @staticmethod
     def _resolve_runtime_path(path_value: str) -> Path:
         path = Path(path_value)
         if path.is_absolute():
@@ -288,21 +352,50 @@ class MetaTrader5Client:
         """Obtiene la hora del servidor MT5 (timezone UTC)."""
         self._ensure_connected()
 
-        # Priorizar sÃ­mbolo sugerido, luego alguno cacheado y un fallback comÃºn
-        candidates = [s for s in [symbol] if s] + list(self._symbol_info_cache.keys()) + ["EURUSD"]
+        candidates = self._server_time_candidates(symbol)
+        now_utc = datetime.now(timezone.utc)
+        max_age_seconds = float(self.clock_sync_max_tick_age_seconds)
+        fresh_ticks: list[tuple[str, datetime, float]] = []
+        stale_ticks: list[str] = []
+        failed_symbols: list[str] = []
 
         for sym in candidates:
             try:
                 self._get_symbol_info(sym)
                 tick = mt5.symbol_info_tick(sym)
-                if tick and getattr(tick, "time", None):
-                    return datetime.fromtimestamp(tick.time, tz=timezone.utc)
-            except Exception:
+                tick_time = self._tick_time_utc(tick) if tick else None
+                if tick_time is None:
+                    failed_symbols.append(f"{sym}:sin_timestamp")
+                    continue
+                age_seconds = self._tick_age_seconds(now_utc, tick_time)
+                if age_seconds <= max_age_seconds:
+                    fresh_ticks.append((sym, tick_time, age_seconds))
+                else:
+                    stale_ticks.append(f"{sym}:{tick_time.isoformat()} age={age_seconds:.1f}s")
+            except Exception as exc:
+                failed_symbols.append(f"{sym}:{exc}")
                 continue
 
-        # Fallback seguro: hora local UTC si no se pudo obtener
-        logger.warning("No se pudo obtener hora del servidor; usando reloj local UTC")
-        return datetime.now(timezone.utc)
+        if fresh_ticks:
+            selected_symbol, selected_time, selected_age = max(fresh_ticks, key=lambda item: item[1])
+            logger.debug(
+                "Hora broker desde tick fresco symbol=%s time=%s age=%.1fs candidates=%s",
+                selected_symbol,
+                selected_time.isoformat(),
+                selected_age,
+                ",".join(candidates),
+            )
+            return selected_time
+
+        logger.warning(
+            "No se pudo obtener tick fresco de referencia MT5; usando reloj local UTC. "
+            "max_age=%ss candidates=%s stale=%s failed=%s",
+            self.clock_sync_max_tick_age_seconds,
+            ",".join(candidates),
+            "; ".join(stale_ticks) or "none",
+            "; ".join(failed_symbols) or "none",
+        )
+        return now_utc
 
     def _now_broker_utc(self, symbol: Optional[str] = None) -> datetime:
         """Obtiene 'ahora' en UTC priorizando hora del servidor MT5."""
@@ -338,6 +431,26 @@ class MetaTrader5Client:
             caller="MetaTrader5Client._deal_time_utc",
         )
 
+    def _fetch_history_deals_or_raise(self, from_utc: datetime, to_utc: datetime, *, context: str) -> list:
+        deals = mt5.history_deals_get(from_utc, to_utc)
+        if deals is None:
+            error_code, error_msg = mt5.last_error()
+            raise MT5DataError(
+                f"{context}: no se pudo consultar historial MT5 "
+                f"({error_code} - {error_msg})"
+            )
+        return list(deals)
+
+    def _is_trading_deal(self, deal: object) -> bool:
+        deal_entry_in = getattr(mt5, "DEAL_ENTRY_IN", 0)
+        deal_entry_out = getattr(mt5, "DEAL_ENTRY_OUT", 1)
+        if getattr(deal, "entry", None) not in (deal_entry_in, deal_entry_out):
+            return False
+        try:
+            return int(getattr(deal, "position_id", 0) or 0) > 0
+        except Exception:
+            return False
+
     def _load_closed_trades_cursor(self) -> None:
         path = self._closed_trades_cursor_path
         if not path.exists():
@@ -363,9 +476,9 @@ class MetaTrader5Client:
         except Exception as exc:
             logger.warning("No se pudo cargar cursor de cierres (%s): %s", path, exc)
 
-    def _save_closed_trades_cursor(self) -> None:
+    def _save_closed_trades_cursor(self) -> bool:
         if self._closed_trades_cursor_time_utc is None:
-            return
+            return False
         try:
             self._closed_trades_cursor_path.parent.mkdir(parents=True, exist_ok=True)
             payload = {
@@ -373,12 +486,35 @@ class MetaTrader5Client:
                 "cursor_ticket": int(self._closed_trades_cursor_ticket),
                 "updated_at_utc": datetime.now(timezone.utc).isoformat(),
             }
-            self._closed_trades_cursor_path.write_text(
-                json.dumps(payload, ensure_ascii=True, indent=2),
-                encoding="utf-8",
+            tmp_path = self._closed_trades_cursor_path.with_name(
+                f"{self._closed_trades_cursor_path.name}.tmp"
             )
+            tmp_path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+            tmp_path.replace(self._closed_trades_cursor_path)
+            return True
         except Exception as exc:
             logger.warning("No se pudo persistir cursor de cierres (%s): %s", self._closed_trades_cursor_path, exc)
+            return False
+
+    def commit_closed_trades_cursor(self) -> None:
+        """Persiste el cursor pendiente tras procesar correctamente los cierres."""
+        if self._pending_closed_trades_cursor_time_utc is None:
+            return
+        previous_time = self._closed_trades_cursor_time_utc
+        previous_ticket = self._closed_trades_cursor_ticket
+        self._closed_trades_cursor_time_utc = self._pending_closed_trades_cursor_time_utc
+        self._closed_trades_cursor_ticket = int(self._pending_closed_trades_cursor_ticket)
+        if not self._save_closed_trades_cursor():
+            self._closed_trades_cursor_time_utc = previous_time
+            self._closed_trades_cursor_ticket = previous_ticket
+            return
+        logger.info(
+            "Cursor de cierres confirmado time=%s ticket=%s",
+            self._closed_trades_cursor_time_utc.isoformat(),
+            self._closed_trades_cursor_ticket,
+        )
+        self._pending_closed_trades_cursor_time_utc = None
+        self._pending_closed_trades_cursor_ticket = 0
 
     def _fetch_deals_by_position(
         self,
@@ -736,6 +872,119 @@ class MetaTrader5Client:
             )
             return stop_loss, take_profit
 
+    def prepare_market_order_levels(
+        self,
+        symbol: str,
+        order_type: str,
+        stop_loss: Optional[float],
+        take_profit: Optional[float],
+    ) -> tuple[float, Optional[float], Optional[float]]:
+        """Devuelve precio estimado de entrada y SL/TP normalizados antes del sizing."""
+        self._ensure_connected()
+
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None:
+            error_code, error_msg = mt5.last_error()
+            raise MT5DataError(
+                f"No se pudo obtener precio para preparar niveles de {symbol}: "
+                f"{error_code} - {error_msg}"
+            )
+
+        if order_type == "BUY":
+            entry_price = float(getattr(tick, "ask", 0.0) or 0.0)
+        elif order_type == "SELL":
+            entry_price = float(getattr(tick, "bid", 0.0) or 0.0)
+        else:
+            raise ValueError(f"Tipo de orden no soportado para preparar niveles: {order_type}")
+
+        if entry_price <= 0 or not math.isfinite(entry_price):
+            raise MT5DataError(f"Precio de entrada invalido para {symbol}: {entry_price}")
+
+        normalized_sl, normalized_tp = self._normalize_market_stops(
+            symbol=symbol,
+            order_type=order_type,
+            execution_price=entry_price,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+        )
+        return entry_price, normalized_sl, normalized_tp
+
+    def _validate_market_stops_without_mutation(
+        self,
+        symbol: str,
+        order_type: str,
+        execution_price: float,
+        stop_loss: Optional[float],
+        take_profit: Optional[float],
+    ) -> tuple[bool, Optional[str]]:
+        """Valida SL/TP contra el tick actual sin corregirlos ni omitirlos."""
+        if stop_loss is None and take_profit is None:
+            return True, None
+
+        try:
+            symbol_info = self._get_symbol_info(symbol)
+            tick = mt5.symbol_info_tick(symbol)
+        except Exception as exc:
+            return False, f"No se pudo validar SL/TP para {symbol}: {exc}"
+
+        if tick is None:
+            return False, f"No se pudo validar SL/TP para {symbol}: tick no disponible"
+
+        bid = self._safe_float(getattr(tick, "bid", None), default=0.0)
+        ask = self._safe_float(getattr(tick, "ask", None), default=0.0)
+        point = self._safe_float(getattr(symbol_info, "point", None), default=0.0)
+        if point <= 0:
+            point = self._safe_float(getattr(symbol_info, "trade_tick_size", None), default=0.0)
+        if point <= 0:
+            point = 0.00001
+
+        stops_level = self._safe_float(getattr(symbol_info, "trade_stops_level", None), default=0.0)
+        freeze_level = self._safe_float(getattr(symbol_info, "trade_freeze_level", None), default=0.0)
+        min_distance = (max(stops_level, freeze_level, 0.0) + 1.0) * point
+        tolerance = point * 0.1
+
+        if order_type == "BUY":
+            reference_price = bid if bid > 0 else float(execution_price)
+            max_valid_sl = reference_price - min_distance
+            min_valid_tp = reference_price + min_distance
+            if stop_loss is not None and float(stop_loss) > max_valid_sl + tolerance:
+                return (
+                    False,
+                    "SL/TP invalidos sin reajuste final: "
+                    f"BUY {symbol} SL={float(stop_loss):.5f} ref={reference_price:.5f} "
+                    f"min_dist={min_distance:.5f}",
+                )
+            if take_profit is not None and float(take_profit) < min_valid_tp - tolerance:
+                return (
+                    False,
+                    "SL/TP invalidos sin reajuste final: "
+                    f"BUY {symbol} TP={float(take_profit):.5f} ref={reference_price:.5f} "
+                    f"min_dist={min_distance:.5f}",
+                )
+            return True, None
+
+        if order_type == "SELL":
+            reference_price = ask if ask > 0 else float(execution_price)
+            min_valid_sl = reference_price + min_distance
+            max_valid_tp = reference_price - min_distance
+            if stop_loss is not None and float(stop_loss) < min_valid_sl - tolerance:
+                return (
+                    False,
+                    "SL/TP invalidos sin reajuste final: "
+                    f"SELL {symbol} SL={float(stop_loss):.5f} ref={reference_price:.5f} "
+                    f"min_dist={min_distance:.5f}",
+                )
+            if take_profit is not None and float(take_profit) > max_valid_tp + tolerance:
+                return (
+                    False,
+                    "SL/TP invalidos sin reajuste final: "
+                    f"SELL {symbol} TP={float(take_profit):.5f} ref={reference_price:.5f} "
+                    f"min_dist={min_distance:.5f}",
+                )
+            return True, None
+
+        return False, f"Tipo de orden no soportado para validar SL/TP: {order_type}"
+
     def _calculate_required_margin(
         self, symbol: str, order_type: int, volume: float, price: float
     ) -> Optional[float]:
@@ -945,20 +1194,19 @@ class MetaTrader5Client:
             price = tick.bid
             logger.debug("Orden SELL a precio BID: %.5f", price)
         
-        # Detectar filling mode compatible con el sÃ­mbolo
-        filling_mode = self._get_filling_mode(order_request.symbol)
-
-        # Ajustar SL/TP contra reglas de distancia mÃ­nima del sÃ­mbolo para reducir
-        # rechazos 10016 (Invalid stops) por niveles demasiado cercanos al mercado.
-        normalized_sl, normalized_tp = self._normalize_market_stops(
+        stops_are_valid, stops_error = self._validate_market_stops_without_mutation(
             symbol=order_request.symbol,
             order_type=order_request.order_type,
             execution_price=float(price),
             stop_loss=order_request.stop_loss,
             take_profit=order_request.take_profit,
         )
-        order_request.stop_loss = normalized_sl
-        order_request.take_profit = normalized_tp
+        if not stops_are_valid:
+            logger.error("Orden bloqueada por SL/TP invalidos: %s", stops_error)
+            return OrderResult(success=False, error_message=stops_error)
+
+        # Detectar filling mode compatible con el sÃ­mbolo
+        filling_mode = self._get_filling_mode(order_request.symbol)
         
         # Construir request de MT5
         request = {
@@ -1414,14 +1662,15 @@ class MetaTrader5Client:
                 take_profit=pos.tp if pos.tp != 0 else None,
                 strategy_name=strategy_name,
                 open_time=datetime.fromtimestamp(pos.time, tz=timezone.utc),
-                magic_number=pos.magic if pos.magic != 0 else None
+                magic_number=pos.magic if pos.magic != 0 else None,
+                profit=self._safe_float(getattr(pos, "profit", 0.0), default=0.0),
             )
             
             result.append(position)
             
-            logger.debug("PosiciÃ³n: %s, volumen=%.2f, entry=%.5f, SL=%s, TP=%s, magic=%s",
+            logger.debug("PosiciÃ³n: %s, volumen=%.2f, entry=%.5f, SL=%s, TP=%s, magic=%s, profit=%.2f",
                         pos.symbol, pos.volume, pos.price_open,
-                        position.stop_loss, position.take_profit, pos.magic)
+                        position.stop_loss, position.take_profit, pos.magic, position.profit)
         
         return result
 
@@ -1461,7 +1710,6 @@ class MetaTrader5Client:
             to_utc=to_utc,
             apply_cursor_filter=True,
             update_cursor=True,
-            persist_dedupe=True,
             log_prefix="CLOSED_TRADES",
         )
 
@@ -1494,8 +1742,84 @@ class MetaTrader5Client:
             to_utc=to_utc,
             apply_cursor_filter=False,
             update_cursor=False,
-            persist_dedupe=False,
             log_prefix="CLOSED_TRADES_SNAPSHOT",
+        )
+
+    def get_first_closed_trade_time(self, to_utc: datetime | None = None) -> datetime | None:
+        """Descubre el primer deal de trading disponible en MT5 sin persistencia local."""
+        if self._risk_first_trade_scanned:
+            return self._risk_first_trade_time_utc
+
+        logger.info("Descubriendo primer deal de trading disponible en MT5 para riesgo...")
+        self._ensure_connected()
+
+        to_utc = self._ensure_utc_datetime(
+            to_utc or self._now_broker_utc(),
+            caller="MetaTrader5Client.get_first_closed_trade_time.to_utc",
+        )
+        min_utc = _RISK_HISTORY_DISCOVERY_MIN_UTC
+        if to_utc <= min_utc:
+            self._risk_first_trade_scanned = True
+            self._risk_first_trade_time_utc = None
+            return None
+
+        earliest: datetime | None = None
+        window_end = to_utc
+        while window_end > min_utc:
+            window_start = max(min_utc, window_end - _RISK_HISTORY_DISCOVERY_CHUNK)
+            deals = self._fetch_history_deals_or_raise(
+                window_start,
+                window_end,
+                context="RISK_FIRST_TRADE_DISCOVERY",
+            )
+            for deal in deals:
+                if not self._is_trading_deal(deal):
+                    continue
+                deal_time = self._deal_time_utc(deal)
+                if deal_time > to_utc:
+                    continue
+                if earliest is None or deal_time < earliest:
+                    earliest = deal_time
+            window_end = window_start
+
+        self._risk_first_trade_time_utc = earliest
+        self._risk_first_trade_scanned = True
+        logger.info(
+            "Primer deal de trading para riesgo: %s",
+            earliest.isoformat() if earliest is not None else "none",
+        )
+        return earliest
+
+    def get_risk_closed_trades_snapshot(self, to_utc: datetime | None = None) -> list[TradeRecord]:
+        """Recupera cierres para riesgo desde el primer deal MT5 disponible.
+
+        No usa ni modifica cursor/ledger; si MT5 falla, propaga la excepcion para
+        que el motor bloquee nuevas entradas en ese ciclo.
+        """
+        self._ensure_connected()
+        to_utc = self._ensure_utc_datetime(
+            to_utc or self._now_broker_utc(),
+            caller="MetaTrader5Client.get_risk_closed_trades_snapshot.to_utc",
+        )
+        from_utc = self.get_first_closed_trade_time(to_utc=to_utc)
+        if from_utc is None:
+            logger.info("RISK_CLOSED_TRADES_RESULT first_trade=none trades_complete=0")
+            return []
+        if from_utc >= to_utc:
+            return []
+
+        logger.info(
+            "RISK_CLOSED_TRADES_QUERY range_utc=%s..%s",
+            from_utc.isoformat(),
+            to_utc.isoformat(),
+        )
+        return self._collect_closed_trades(
+            from_utc=from_utc,
+            to_utc=to_utc,
+            apply_cursor_filter=False,
+            update_cursor=False,
+            log_prefix="RISK_CLOSED_TRADES",
+            raise_on_error=True,
         )
 
     def _collect_closed_trades(
@@ -1505,13 +1829,18 @@ class MetaTrader5Client:
         to_utc: datetime,
         apply_cursor_filter: bool,
         update_cursor: bool,
-        persist_dedupe: bool,
         log_prefix: str,
+        raise_on_error: bool = False,
     ) -> list[TradeRecord]:
         """Consulta deals en rango y reconstruye trades completos IN/OUT."""
         deals = mt5.history_deals_get(from_utc, to_utc)
         if deals is None:
             error_code, error_msg = mt5.last_error()
+            if raise_on_error:
+                raise MT5DataError(
+                    f"{log_prefix}: no se pudo consultar historial MT5 "
+                    f"({error_code} - {error_msg})"
+                )
             logger.error(
                 "Error al consultar historial. CÃ³digo: %d, Mensaje: %s",
                 error_code,
@@ -1577,8 +1906,6 @@ class MetaTrader5Client:
 
             if dedupe_key in local_dedupe_keys:
                 continue
-            if persist_dedupe and dedupe_key in self._closed_trade_dedupe_keys:
-                continue
 
             entry_deal = self._select_entry_for_exit(entry_by_position.get(position_id, []), exit_deal)
             if entry_deal is None:
@@ -1638,24 +1965,21 @@ class MetaTrader5Client:
 
             result.append(trade_record)
             local_dedupe_keys.add(dedupe_key)
-            if persist_dedupe:
-                self._closed_trade_dedupe_keys.add(dedupe_key)
 
         result.sort(key=lambda x: x.exit_time, reverse=True)
 
         if update_cursor:
             max_deal = trading_deals[-1]
-            self._closed_trades_cursor_time_utc = self._deal_time_utc(max_deal)
-            self._closed_trades_cursor_ticket = self._deal_ticket(max_deal)
-            self._save_closed_trades_cursor()
+            self._pending_closed_trades_cursor_time_utc = self._deal_time_utc(max_deal)
+            self._pending_closed_trades_cursor_ticket = self._deal_ticket(max_deal)
             logger.info(
-                "%s_RESULT deals_found=%d trading_deals=%d trades_complete=%d cursor_updated=%s/%s",
+                "%s_RESULT deals_found=%d trading_deals=%d trades_complete=%d cursor_staged=%s/%s",
                 log_prefix,
                 len(deals_list),
                 len(trading_deals),
                 len(result),
-                self._closed_trades_cursor_time_utc.isoformat(),
-                self._closed_trades_cursor_ticket,
+                self._pending_closed_trades_cursor_time_utc.isoformat(),
+                self._pending_closed_trades_cursor_ticket,
             )
             return result
 

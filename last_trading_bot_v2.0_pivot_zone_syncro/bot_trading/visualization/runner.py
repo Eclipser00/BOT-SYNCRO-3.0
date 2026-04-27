@@ -19,31 +19,8 @@ logger = logging.getLogger(__name__)
 
 
 def _resolve_bot_events_path(root: Path, configured_path: str) -> Path:
-    """Resuelve la ruta de eventos del bot priorizando la fuente más reciente.
-
-    Soporta dos ubicaciones reales del proyecto:
-    - `<repo>/outputs/bot_events.jsonl`
-    - `<repo_parent>/outputs/bot_events.jsonl`
-    """
-    local_path = (root / configured_path).resolve()
-    parent_path = (root.parent / configured_path).resolve()
-
-    local_exists = local_path.exists()
-    parent_exists = parent_path.exists()
-
-    if local_exists and parent_exists:
-        local_mtime = local_path.stat().st_mtime
-        parent_mtime = parent_path.stat().st_mtime
-        selected = parent_path if parent_mtime > local_mtime else local_path
-        if selected == parent_path:
-            logger.info("Eventos del bot detectados en ruta padre: %s", parent_path)
-        return selected
-
-    if parent_exists:
-        logger.info("Eventos del bot detectados en ruta padre: %s", parent_path)
-        return parent_path
-
-    return local_path
+    """Resuelve la ruta de eventos dentro de la raiz del bot."""
+    return (root / configured_path).resolve()
 
 
 @dataclass
@@ -129,9 +106,9 @@ def build_runner(
     mode: str | None = None,
     refresh_seconds: int = 900,
     cycle_sleep_seconds: int | None = None,
-    output_html: str = "outputs/visualizer_m3.html",
+    output_html: str = "plots/visualizer_m3.html",
     pivot_log: str = "logs/pivot_zones.log",
-    bot_events: str = "outputs/bot_events.jsonl",
+    bot_events: str = "plots/bot_events.jsonl",
     max_candles: int | None = None,
     max_events: int = 1500,
     max_cycles: int | None = None,

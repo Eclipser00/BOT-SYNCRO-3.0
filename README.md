@@ -2,7 +2,7 @@
 
 ## Qué hace
 
-Bot de trading algorítmico que opera en MetaTrader 5 usando una estrategia de ruptura de zonas pivote. Detecta zonas de precio construidas sobre pivotes de velas, entra cuando el precio rompe una de esas zonas y gestiona la posición con SL/TP calculados dinámicamente. Soporta modo producción (conexión MT5 real) y modo desarrollo (replay con CSV histórico y broker simulado).
+Bot de trading algorítmico que opera en MetaTrader 5 usando una estrategia de ruptura de zonas pivote. Detecta zonas de precio construidas sobre pivotes de velas, entra cuando el precio rompe una de esas zonas y gestiona la posición con SL/TP estructurales. El SL inicial nace dentro de la zona rota y puede moverse una sola vez con break-even estructural por pivote; no hay trailing continuo. Soporta modo producción (conexión MT5 real) y modo desarrollo (replay con CSV histórico y broker simulado).
 
 ## Stack
 
@@ -50,12 +50,22 @@ bot syncro 3.0 (claude)/
 │   │       └── runner.py                       # Runner del visualizador standalone
 │   ├── data_development/                       # CSV históricos para modo desarrollo
 │   ├── logs/                                   # Logs de ejecución y pivote
-│   ├── outputs/                                # Eventos JSONL, HTMLs y cursores
+│   ├── plots/                                  # Eventos JSONL, HTMLs y cursores
 │   └── tests/                                  # Suite completa de tests
 ├── shared/
 │   └── instrument_specs.json                   # Especificaciones de instrumentos (tick_size, etc.)
 └── backtest bot v7.0 syncro/                   # Módulo separado de backtesting
 ```
+
+## Estado actual de salidas runtime
+
+El proyecto principal `last_trading_bot_v2.0_pivot_zone_syncro` usa una única carpeta runtime interna:
+
+- `last_trading_bot_v2.0_pivot_zone_syncro/plots/bot_events.jsonl`
+- `last_trading_bot_v2.0_pivot_zone_syncro/plots/closed_trades_cursor.json`
+- `last_trading_bot_v2.0_pivot_zone_syncro/plots/visualizer{SYMBOL}.html`
+
+El last trading bot no debe crear, leer ni priorizar `outputs/bot_events.jsonl` en la raíz del workspace. Los resolvers del visualizador apuntan solo a la raíz del bot y no consultan la carpeta padre. Al arrancar, `_clean_plots()` borra HTMLs anteriores y reinicia `plots/bot_events.jsonl`, pero conserva `plots/closed_trades_cursor.json`.
 
 ## Módulos
 
@@ -126,11 +136,12 @@ bot syncro 3.0 (claude)/
   - Lógica interna:
     - Detecta pivotes de 3 velas en `TF_zone` (M9) y calcula anchura con ATR(14).
     - Construye y valida zonas: distancia mínima entre zonas (`n1 * ancho`), pivotes mínimos para validar (`n3`).
-    - Detecta pivotes en `TF_stop` (M3) para calcular el SL dentro de la zona rota.
+    - Detecta pivotes en `TF_stop` (M3) para calcular el SL inicial dentro de la zona rota.
+    - Con posición abierta, aplica break-even estructural por pivote una sola vez: BUY mueve el SL al primer `pivot_min` posterior por encima del entry; SELL al primer `pivot_max` posterior por debajo del entry.
     - Busca breakout de precio en la última vela de `TF_entry` (M3).
     - Selecciona zona objetivo (la más cercana en dirección del trade) para el TP.
     - Calcula lotaje mediante `size_pct` sobre el equity de la cuenta, ajustado ±20% por distancia del stop.
-    - Con posición abierta: gestiona brackets SL/TP y aplica TP adaptativo si aparece una zona mejor.
+    - Con posición abierta: gestiona SL/TP nativo en MT5 o brackets simulados en FakeBroker, aplica el break-even estructural por pivote una sola vez y aplica TP adaptativo si aparece una zona mejor.
 
 ### `bot_trading/application/risk_management.py`
 - **Propósito**: Evalúa límites de drawdown antes de operar.
@@ -148,7 +159,7 @@ bot syncro 3.0 (claude)/
   - `get_strategy_name(magic)` → Lookup inverso: magic number → nombre de estrategia.
 
 ### `bot_trading/application/utils/event_logger.py`
-- **Propósito**: Escribe eventos del bot en formato JSONL en `outputs/bot_events.jsonl`. Errores de escritura se silencian para no interrumpir el bot.
+- **Propósito**: Escribe eventos del bot en formato JSONL en `plots/bot_events.jsonl`. Errores de escritura se silencian para no interrumpir el bot.
 - **Clase `EventLogger`**:
   - `log(payload)` → Serializa el payload normalizado (tipos, campos opcionales de zona pivote) y lo añade al fichero.
 
@@ -173,8 +184,8 @@ bot syncro 3.0 (claude)/
 ### `bot_trading/visualization/live_plot_service.py`
 - **Propósito**: Servicio de visualización automático integrado al loop. Genera y refresca HTMLs Bokeh por símbolo.
 - **Clases**:
-  - `AutoVisualizerService` → Mantiene estado M3 por símbolo, lee eventos JSONL y zonas pivote del log, y renderiza un HTML por ticker en `outputs/`.
-  - `resolve_bot_events_path(root, path)` → Resuelve la ruta del fichero de eventos priorizando el más reciente entre carpeta local y padre.
+  - `AutoVisualizerService` → Mantiene estado M3 por símbolo, lee eventos JSONL y zonas pivote del log, y renderiza un HTML por ticker en `plots/`.
+  - `resolve_bot_events_path(root, path)` → Resuelve la ruta del fichero de eventos dentro de la raíz del bot.
 
 ### `bot_trading/visualization/plot_bokeh.py`
 - **Propósito**: Renderiza el gráfico de velas con zonas pivote, trades y señales usando Bokeh. Devuelve HTML estático.
@@ -343,7 +354,7 @@ BOT SYNCRO 3.0
 │  │  └─ Guardar nuevas zonas válidas
 │  │
 │  ├─ Procesar timeframe de stop (`TF_stop`)
-│  │  └─ Detectar pivotes usados para SL
+│  │  └─ Detectar pivotes usados para SL inicial y break-even estructural
 │  │
 │  ├─ Sincronizar estado con broker
 │  │  ├─ Si hay posición abierta
@@ -357,8 +368,9 @@ BOT SYNCRO 3.0
 │  ├─ ¿Hay posición abierta?
 │  │  │
 │  │  ├─ Sí
-│  │  │  ├─ Gestionar brackets
+│  │  │  ├─ Gestionar SL/TP nativo o brackets según broker
 │  │  │  ├─ Mantener SL/TP
+│  │  │  ├─ Aplicar break-even estructural por pivote una sola vez
 │  │  │  ├─ Aplicar TP adaptativo si aparece mejor zona
 │  │  │  └─ No generar nueva entrada
 │  │  │
@@ -430,9 +442,9 @@ BOT SYNCRO 3.0
 │  │
 │  ├─ Logs
 │  ├─ Eventos JSONL
-│  │  └─ `outputs/bot_events.jsonl`
+│  │  └─ `plots/bot_events.jsonl`
 │  ├─ Visualizador HTML
-│  │  └─ `outputs/visualizer{SYMBOL}.html`
+│  │  └─ `plots/visualizer{SYMBOL}.html`
 │  └─ Estado interno del bot
 │
 └─ 12. REPETICIÓN
@@ -512,7 +524,9 @@ PIVOTZONETESTSTRATEGY
 │     │
 │     ├─ Detectar pivotes confirmados
 │     ├─ Guardarlos por símbolo
-│     └─ Usarlos luego para elegir el stop dentro de la zona rota
+│     ├─ Guardar último pivote con precio y hora de confirmación
+│     ├─ Usarlos para elegir el stop inicial dentro de la zona rota
+│     └─ Usarlos para el break-even estructural una sola vez
 │
 ├─ 7. SINCRONIZACIÓN CON EL BROKER
 │  │
@@ -542,6 +556,12 @@ PIVOTZONETESTSTRATEGY
 │  │  │
 │  │  ├─ Si no usa brackets
 │  │  │  └─ limpiar pendientes sobrantes
+│  │  │
+│  │  ├─ Evaluar stop dinámico una sola vez
+│  │  │  ├─ no es trailing continuo
+│  │  │  ├─ BUY  -> primer `pivot_min` posterior por encima del entry
+│  │  │  ├─ SELL -> primer `pivot_max` posterior por debajo del entry
+│  │  │  └─ si se aplica, bloquear nuevas actualizaciones del SL
 │  │  │
 │  │  ├─ Evaluar TP adaptativo
 │  │  │  │
@@ -589,7 +609,11 @@ PIVOTZONETESTSTRATEGY
 │  │  └─ close de la vela actual en `TF_entry`
 │  │
 │  ├─ Stop loss
-│  │  └─ buscar pivote confirmado dentro de la zona rota
+│  │  └─ buscar pivote confirmado dentro de la zona rota para SL inicial
+│
+│  ├─ Stop dinámico una sola vez
+│  │  ├─ BUY  -> primer `pivot_min` posterior por encima del entry
+│  │  └─ SELL -> primer `pivot_max` posterior por debajo del entry
 │  │
 │  ├─ Take profit
 │  │  └─ borde más cercano de la zona objetivo
@@ -643,6 +667,7 @@ PIVOTZONETESTSTRATEGY
 │  ├─ Guardar zona objetivo
 │  ├─ Guardar SL activo
 │  ├─ Guardar TP activo
+│  ├─ Marcar stop dinámico como no actualizado
 │  └─ Dejar preparado el manejo del siguiente ciclo
 │
 └─ 16. RESULTADO FINAL POSIBLE
@@ -797,5 +822,5 @@ PIVOTZONETESTSTRATEGY
    └─ además deja trazabilidad en:
    ├─ logs
    ├─ `open_positions`
-   └─ `outputs/bot_events.jsonl`
+   └─ `plots/bot_events.jsonl`
 ```

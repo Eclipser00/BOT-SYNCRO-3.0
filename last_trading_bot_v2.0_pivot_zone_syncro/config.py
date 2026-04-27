@@ -20,31 +20,36 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 import os
 import sys
-import subprocess
 
 
-def _reexec_with_project_venv_if_needed() -> None:
-    """Relanza este config.py con el .venv local si VSCode usa otro interprete."""
+def _validate_project_venv_if_needed() -> None:
+    """Exige ejecutar este config.py con el .venv local del proyecto."""
+    if __name__ != "__main__":
+        return
+
     project_dir = os.path.dirname(os.path.abspath(__file__))
     local_python = os.path.join(project_dir, ".venv", "Scripts", "python.exe")
     if not os.path.isfile(local_python):
-        return
+        print("[config.py] ERROR: no se encontro el interprete esperado del .venv local.", file=sys.stderr)
+        print(f"[config.py] Ruta esperada: {os.path.abspath(local_python)}", file=sys.stderr)
+        raise SystemExit(1)
 
     current_python = os.path.abspath(sys.executable)
     target_python = os.path.abspath(local_python)
     if current_python.lower() == target_python.lower():
         return
 
-    marker_name = "BOT_TRADING_CONFIG_VENV_REEXEC_DONE"
-    if os.environ.get(marker_name) == "1":
-        return
+    print("[config.py] ERROR: interprete incorrecto para este bot.", file=sys.stderr)
+    print(f"[config.py] Interprete actual:   {current_python}", file=sys.stderr)
+    print(f"[config.py] Interprete esperado: {target_python}", file=sys.stderr)
+    print(
+        "[config.py] Selecciona este .venv en VS Code y arranca este config.py con el triangulo de Python.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 
-    print(f"[config.py] Interprete detectado: {current_python}")
-    print(f"[config.py] Reintentando con venv local: {target_python}")
-    env = os.environ.copy()
-    env[marker_name] = "1"
-    result = subprocess.run([target_python, os.path.abspath(__file__), *sys.argv[1:]], env=env)
-    raise SystemExit(result.returncode)
+
+_validate_project_venv_if_needed()
 
 
 # =============================================================================
@@ -53,6 +58,12 @@ def _reexec_with_project_venv_if_needed() -> None:
 
 # Selecciona el entorno activo: "development" (paper/FakeBroker) o "production" (MT5 real).
 ACTIVE_ENV = "production"  # entorno que usara el bot al arrancar
+
+# Timeframes oficiales para PivotZoneTest (minutos).
+# Cambia estos 3 valores para recalibrar entrada, zonas, stops y loop base.
+PIVOT_TF_ENTRY_MINUTES = 3
+PIVOT_TF_ZONE_MINUTES = 9
+PIVOT_TF_STOP_MINUTES = 3
 
 
 # =============================================================================
@@ -114,7 +125,7 @@ class RiskConfig:
     dd_global: float  # drawdown maximo permitido a nivel bot (%)
     dd_por_activo: Dict[str, float] = field(default_factory=dict)  # drawdown maximo por simbolo (%)
     dd_por_estrategia: Dict[str, float] = field(default_factory=dict)  # drawdown maximo por estrategia (%)
-    initial_balance: float = 20_000.0  # balance de referencia para calculos
+    initial_balance: float = 100_000.0  # balance de referencia para calculos
     max_margin_usage_percent: float = 60.0  # porcentaje maximo de margen a usar
 
 
@@ -198,13 +209,17 @@ class TemporalConfig:
 
     strict_utc_mode: normaliza datetimes naive a UTC y emite warning con contexto.
     closed_trades_cursor_path: ruta del cursor persistente de historial de deals.
+    closed_trades_ledger_path: ruta del ledger persistente de trades cerrados.
     closed_trades_overlap_minutes: solape para releer deals sin perder cierres.
     closed_trades_initial_lookback_hours: ventana inicial si no hay cursor.
     closed_trades_entry_fallback_days: búsqueda histórica de entry cuando llega un OUT sin IN.
     """
 
     strict_utc_mode: bool = True
-    closed_trades_cursor_path: str = "outputs/closed_trades_cursor.json"
+    clock_sync_reference_symbols: List[str] = field(default_factory=lambda: ["EURUSD", "GBPUSD", "USDJPY", "EURGBP"])
+    clock_sync_max_tick_age_seconds: int = 120
+    closed_trades_cursor_path: str = "plots/closed_trades_cursor.json"
+    closed_trades_ledger_path: str = "plots/closed_trades_ledger.jsonl"
     closed_trades_overlap_minutes: int = 10
     closed_trades_initial_lookback_hours: int = 72
     closed_trades_entry_fallback_days: int = 7
@@ -235,123 +250,88 @@ class BotConfig:
 # logging/riesgo; las estrategias y simbolos comparten la misma declaracion.
 DEFAULT_SYMBOLS: List[SymbolConfigEntry] = [
     SymbolConfigEntry(
-        name="BLK",  # simbolo/instrumento a operar
-        min_timeframe="M3",  # timeframe minimo habilitado para este simbolo
-        n1=2,  # separacion minima entre zonas = 3 anchos de zona
-        n2=150,  # ancho de zona = ATR(14) * (100/100) = 1.0x ATR
-        n3=4,  # pivotes minimos para bloquear/validar una zona pivote
-        size_pct=0.08,  # riesgo base por operacion al SL (0.1 = 1% de la cuenta)
-    ),
-    SymbolConfigEntry(
-        name="FSLR",  # simbolo/instrumento a operar
-        min_timeframe="M3",  # timeframe minimo habilitado para este simbolo
-        n1=3,  # separacion minima entre zonas = 3 anchos de zona
-        n2=200,  # ancho de zona = ATR(14) * (100/100) = 1.0x ATR
-        n3=4,  # pivotes minimos para bloquear/validar una zona pivote
-        size_pct=0.05,  # riesgo base por operacion al SL (0.1 = 1% de la cuenta)
-    ),
-        SymbolConfigEntry(
-        name="MA",  # simbolo/instrumento a operar
-        min_timeframe="M3",  # timeframe minimo habilitado para este simbolo
+        name="DIS",  # simbolo/instrumento a operar
+        min_timeframe=f"M{PIVOT_TF_ENTRY_MINUTES}",  # timeframe minimo habilitado para este simbolo
         n1=3,  # separacion minima entre zonas = 3 anchos de zona
         n2=200,  # ancho de zona = ATR(14) * (100/100) = 1.0x ATR
         n3=6,  # pivotes minimos para bloquear/validar una zona pivote
-        size_pct=0.025,  # riesgo base por operacion al SL (0.1 = 1% de la cuenta)
-    ),
-        SymbolConfigEntry(
-        name="JCI",  # simbolo/instrumento a operar
-        min_timeframe="M3",  # timeframe minimo habilitado para este simbolo
-        n1=2,  # separacion minima entre zonas = 3 anchos de zona
-        n2=175,  # ancho de zona = ATR(14) * (100/100) = 1.0x ATR
-        n3=5,  # pivotes minimos para bloquear/validar una zona pivote
-        size_pct=0.07,  # riesgo base por operacion al SL (0.1 = 1% de la cuenta)
-    ),
-        SymbolConfigEntry(
-        name="CARR",  # simbolo/instrumento a operar
-        min_timeframe="M3",  # timeframe minimo habilitado para este simbolo
-        n1=2,  # separacion minima entre zonas = 3 anchos de zona
-        n2=200,  # ancho de zona = ATR(14) * (100/100) = 1.0x ATR
-        n3=4,  # pivotes minimos para bloquear/validar una zona pivote
-        size_pct=0.05,  # riesgo base por operacion al SL (0.1 = 1% de la cuenta)
-    ),
-        SymbolConfigEntry(
-        name="PWR",  # simbolo/instrumento a operar
-        min_timeframe="M3",  # timeframe minimo habilitado para este simbolo
-        n1=3,  # separacion minima entre zonas = 3 anchos de zona
-        n2=150,  # ancho de zona = ATR(14) * (100/100) = 1.0x ATR
-        n3=6,  # pivotes minimos para bloquear/validar una zona pivote
-        size_pct=0.06,  # riesgo base por operacion al SL (0.1 = 1% de la cuenta)
-    ),
-        SymbolConfigEntry(
-        name="COF",  # simbolo/instrumento a operar
-        min_timeframe="M3",  # timeframe minimo habilitado para este simbolo
-        n1=2,  # separacion minima entre zonas = 3 anchos de zona
-        n2=150,  # ancho de zona = ATR(14) * (100/100) = 1.0x ATR
-        n3=4,  # pivotes minimos para bloquear/validar una zona pivote
-        size_pct=0.06,  # riesgo base por operacion al SL (0.1 = 1% de la cuenta)
-    ),
-        SymbolConfigEntry(
-        name="MCHP",  # simbolo/instrumento a operar
-        min_timeframe="M3",  # timeframe minimo habilitado para este simbolo
-        n1=2,  # separacion minima entre zonas = 3 anchos de zona
-        n2=150,  # ancho de zona = ATR(14) * (100/100) = 1.0x ATR
-        n3=5,  # pivotes minimos para bloquear/validar una zona pivote
-        size_pct=0.05,  # riesgo base por operacion al SL (0.1 = 1% de la cuenta)
-    ),
-        SymbolConfigEntry(
-        name="XOM",  # simbolo/instrumento a operar
-        min_timeframe="M3",  # timeframe minimo habilitado para este simbolo
-        n1=3,  # separacion minima entre zonas = 3 anchos de zona
-        n2=200,  # ancho de zona = ATR(14) * (100/100) = 1.0x ATR
-        n3=5,  # pivotes minimos para bloquear/validar una zona pivote
-        size_pct=0.032,  # riesgo base por operacion al SL (0.1 = 1% de la cuenta)
-    ),
-        SymbolConfigEntry(
-        name="SYF",  # simbolo/instrumento a operar
-        min_timeframe="M3",  # timeframe minimo habilitado para este simbolo
-        n1=2,  # separacion minima entre zonas = 3 anchos de zona
-        n2=150,  # ancho de zona = ATR(14) * (100/100) = 1.0x ATR
-        n3=5,  # pivotes minimos para bloquear/validar una zona pivote
-        size_pct=0.05,  # riesgo base por operacion al SL (0.1 = 1% de la cuenta)
-    ),
-        SymbolConfigEntry(
-        name="KMI",  # simbolo/instrumento a operar
-        min_timeframe="M3",  # timeframe minimo habilitado para este simbolo
-        n1=2,  # separacion minima entre zonas = 3 anchos de zona
-        n2=175,  # ancho de zona = ATR(14) * (100/100) = 1.0x ATR
-        n3=5,  # pivotes minimos para bloquear/validar una zona pivote
         size_pct=0.1,  # riesgo base por operacion al SL (0.1 = 1% de la cuenta)
     ),
         SymbolConfigEntry(
-        name="BKR",  # simbolo/instrumento a operar
-        min_timeframe="M3",  # timeframe minimo habilitado para este simbolo
-        n1=2,  # separacion minima entre zonas = 3 anchos de zona
-        n2=150,  # ancho de zona = ATR(14) * (100/100) = 1.0x ATR
+        name="AAPL",  # simbolo/instrumento a operar
+        min_timeframe=f"M{PIVOT_TF_ENTRY_MINUTES}",  # timeframe minimo habilitado para este simbolo
+        n1=3,  # separacion minima entre zonas = 3 anchos de zona
+        n2=200,  # ancho de zona = ATR(14) * (100/100) = 1.0x ATR
         n3=6,  # pivotes minimos para bloquear/validar una zona pivote
         size_pct=0.05,  # riesgo base por operacion al SL (0.1 = 1% de la cuenta)
     ),
         SymbolConfigEntry(
-        name="USB",  # simbolo/instrumento a operar
-        min_timeframe="M3",  # timeframe minimo habilitado para este simbolo
-        n1=2,  # separacion minima entre zonas = 3 anchos de zona
+        name="MSFT",  # simbolo/instrumento a operar
+        min_timeframe=f"M{PIVOT_TF_ENTRY_MINUTES}",  # timeframe minimo habilitado para este simbolo
+        n1=3,  # separacion minima entre zonas = 3 anchos de zona
+        n2=200,  # ancho de zona = ATR(14) * (100/100) = 1.0x ATR
+        n3=4,  # pivotes minimos para bloquear/validar una zona pivote
+        size_pct=0.04,  # riesgo base por operacion al SL (0.1 = 1% de la cuenta)
+    ),
+        SymbolConfigEntry(
+        name="BA",  # simbolo/instrumento a operar
+        min_timeframe=f"M{PIVOT_TF_ENTRY_MINUTES}",  # timeframe minimo habilitado para este simbolo
+        n1=3,  # separacion minima entre zonas = 3 anchos de zona
+        n2=200,  # ancho de zona = ATR(14) * (100/100) = 1.0x ATR
+        n3=4,  # pivotes minimos para bloquear/validar una zona pivote
+        size_pct=0.1,  # riesgo base por operacion al SL (0.1 = 1% de la cuenta)
+    ),
+        SymbolConfigEntry(
+        name="MCD",  # simbolo/instrumento a operar
+        min_timeframe=f"M{PIVOT_TF_ENTRY_MINUTES}",  # timeframe minimo habilitado para este simbolo
+        n1=3,  # separacion minima entre zonas = 3 anchos de zona
         n2=150,  # ancho de zona = ATR(14) * (100/100) = 1.0x ATR
         n3=6,  # pivotes minimos para bloquear/validar una zona pivote
+        size_pct=0.06,  # riesgo base por operacion al SL (0.1 = 1% de la cuenta)
+    ),
+        SymbolConfigEntry(
+        name="AMD",  # simbolo/instrumento a operar
+        min_timeframe=f"M{PIVOT_TF_ENTRY_MINUTES}",  # timeframe minimo habilitado para este simbolo
+        n1=3,  # separacion minima entre zonas = 3 anchos de zona
+        n2=200,  # ancho de zona = ATR(14) * (100/100) = 1.0x ATR
+        n3=6,  # pivotes minimos para bloquear/validar una zona pivote
+        size_pct=0.05,  # riesgo base por operacion al SL (0.1 = 1% de la cuenta)
+    ),
+        SymbolConfigEntry(
+        name="NFLX",  # simbolo/instrumento a operar
+        min_timeframe=f"M{PIVOT_TF_ENTRY_MINUTES}",  # timeframe minimo habilitado para este simbolo
+        n1=3,  # separacion minima entre zonas = 3 anchos de zona
+        n2=175,  # ancho de zona = ATR(14) * (100/100) = 1.0x ATR
+        n3=4,  # pivotes minimos para bloquear/validar una zona pivote
+        size_pct=0.06,  # riesgo base por operacion al SL (0.1 = 1% de la cuenta)
+    ),
+        SymbolConfigEntry(
+        name="ILMN",  # simbolo/instrumento a operar
+        min_timeframe=f"M{PIVOT_TF_ENTRY_MINUTES}",  # timeframe minimo habilitado para este simbolo
+        n1=3,  # separacion minima entre zonas = 3 anchos de zona
+        n2=200,  # ancho de zona = ATR(14) * (100/100) = 1.0x ATR
+        n3=4,  # pivotes minimos para bloquear/validar una zona pivote
         size_pct=0.1,  # riesgo base por operacion al SL (0.1 = 1% de la cuenta)
     ),
 ]
+
 
 DEFAULT_STRATEGIES: List[StrategyConfig] = [
     StrategyConfig(
         name="PivotZoneTest",
         allowed_symbols=[sym.name for sym in DEFAULT_SYMBOLS],  # se recalibra en validate_config si se agregan simbolos
-        tf_entry="M3",
-        tf_zone="M9",
-        tf_stop="M3",
+        tf_entry=f"M{PIVOT_TF_ENTRY_MINUTES}",
+        tf_zone=f"M{PIVOT_TF_ZONE_MINUTES}",
+        tf_stop=f"M{PIVOT_TF_STOP_MINUTES}",
         n1=3,
         n2=100,
         n3=5,
         size_pct=0.05,
-        timeframes=["M3", "M9"],
+        timeframes=list(dict.fromkeys([
+            f"M{PIVOT_TF_ENTRY_MINUTES}",
+            f"M{PIVOT_TF_ZONE_MINUTES}",
+            f"M{PIVOT_TF_STOP_MINUTES}",
+        ])),
     )
 ]
 
@@ -385,8 +365,8 @@ ENVIRONMENTS: Dict[str, BotConfig] = {
         symbols=copy.deepcopy(DEFAULT_SYMBOLS),
         strategies=copy.deepcopy(DEFAULT_STRATEGIES),
         loop=LoopConfig(
-            timeframe_minutes=3,  # vela base en minutos
-            wait_after_close=0,  # sin espera tras cierre
+            timeframe_minutes=PIVOT_TF_ENTRY_MINUTES,  # vela base en minutos
+            wait_after_close=2,  # sin espera tras cierre
             skip_sleep_when_simulated=False,  # en vivo se respeta el sleep
         ),
         data=DataConfig(
@@ -395,11 +375,14 @@ ENVIRONMENTS: Dict[str, BotConfig] = {
             bootstrap_lookback_days_zone=30,  # dias para inicializar zonas
             bootstrap_lookback_days_entry=None,  # hereda zona si None
             bootstrap_lookback_days_stop=None,  # hereda zona si None
-            csv_base_timeframe="M3",  # timeframe base de CSV
+            csv_base_timeframe=f"M{PIVOT_TF_ENTRY_MINUTES}",  # timeframe base de CSV
         ),
         temporal=TemporalConfig(
             strict_utc_mode=True,
-            closed_trades_cursor_path="outputs/closed_trades_cursor.json",
+            clock_sync_reference_symbols=["EURUSD", "GBPUSD", "USDJPY", "EURGBP"],
+            clock_sync_max_tick_age_seconds=120,
+            closed_trades_cursor_path="plots/closed_trades_cursor.json",
+            closed_trades_ledger_path="plots/closed_trades_ledger.jsonl",
             closed_trades_overlap_minutes=10,
             closed_trades_initial_lookback_hours=72,
             closed_trades_entry_fallback_days=7,
@@ -434,7 +417,7 @@ ENVIRONMENTS: Dict[str, BotConfig] = {
         symbols=copy.deepcopy(DEFAULT_SYMBOLS),
         strategies=copy.deepcopy(DEFAULT_STRATEGIES),
         loop=LoopConfig(
-            timeframe_minutes=3,  # vela base en minutos
+            timeframe_minutes=PIVOT_TF_ENTRY_MINUTES,  # vela base en minutos
             wait_after_close=0,  # sin espera tras cierre
             skip_sleep_when_simulated=True,  # omite sleep al simular
         ),
@@ -444,11 +427,14 @@ ENVIRONMENTS: Dict[str, BotConfig] = {
             bootstrap_lookback_days_zone=0,  # dias para inicializar zonas
             bootstrap_lookback_days_entry=None,  # hereda zona si None
             bootstrap_lookback_days_stop=None,  # hereda zona si None
-            csv_base_timeframe="M3",  # timeframe base de CSV
+            csv_base_timeframe=f"M{PIVOT_TF_ENTRY_MINUTES}",  # timeframe base de CSV
         ),
         temporal=TemporalConfig(
             strict_utc_mode=True,
-            closed_trades_cursor_path="outputs/closed_trades_cursor.json",
+            clock_sync_reference_symbols=["EURUSD", "GBPUSD", "USDJPY", "EURGBP"],
+            clock_sync_max_tick_age_seconds=120,
+            closed_trades_cursor_path="plots/closed_trades_cursor.json",
+            closed_trades_ledger_path="plots/closed_trades_ledger.jsonl",
             closed_trades_overlap_minutes=10,
             closed_trades_initial_lookback_hours=72,
             closed_trades_entry_fallback_days=7,
@@ -490,6 +476,24 @@ def validate_config(cfg: BotConfig) -> None:
     """Valida coherencia basica antes de arrancar."""
     _maybe_load_broker_env(cfg.broker)
     errors: List[str] = []
+
+    pivot_tf_values = {
+        "PIVOT_TF_ENTRY_MINUTES": PIVOT_TF_ENTRY_MINUTES,
+        "PIVOT_TF_ZONE_MINUTES": PIVOT_TF_ZONE_MINUTES,
+        "PIVOT_TF_STOP_MINUTES": PIVOT_TF_STOP_MINUTES,
+    }
+    for name, value in pivot_tf_values.items():
+        if value <= 0:
+            errors.append(f"{name} debe ser > 0.")
+    if all(value > 0 for value in pivot_tf_values.values()):
+        if PIVOT_TF_ZONE_MINUTES < PIVOT_TF_ENTRY_MINUTES:
+            errors.append("PIVOT_TF_ZONE_MINUTES debe ser >= PIVOT_TF_ENTRY_MINUTES.")
+        elif PIVOT_TF_ZONE_MINUTES % PIVOT_TF_ENTRY_MINUTES != 0:
+            errors.append("PIVOT_TF_ZONE_MINUTES debe ser multiplo de PIVOT_TF_ENTRY_MINUTES.")
+        if PIVOT_TF_STOP_MINUTES < PIVOT_TF_ENTRY_MINUTES:
+            errors.append("PIVOT_TF_STOP_MINUTES debe ser >= PIVOT_TF_ENTRY_MINUTES.")
+        elif PIVOT_TF_STOP_MINUTES % PIVOT_TF_ENTRY_MINUTES != 0:
+            errors.append("PIVOT_TF_STOP_MINUTES debe ser multiplo de PIVOT_TF_ENTRY_MINUTES.")
 
     if ACTIVE_ENV not in ENVIRONMENTS:
         errors.append(f"ACTIVE_ENV debe ser uno de {list(ENVIRONMENTS.keys())}")
@@ -569,8 +573,23 @@ def validate_config(cfg: BotConfig) -> None:
 
     if not isinstance(cfg.temporal.strict_utc_mode, bool):
         errors.append("strict_utc_mode debe ser booleano.")
+    if not cfg.temporal.clock_sync_reference_symbols:
+        errors.append("clock_sync_reference_symbols no puede estar vacio.")
+    else:
+        cleaned_clock_symbols: List[str] = []
+        for symbol in cfg.temporal.clock_sync_reference_symbols:
+            symbol_value = str(symbol).strip()
+            if not symbol_value:
+                errors.append("clock_sync_reference_symbols no puede contener simbolos vacios.")
+            elif symbol_value not in cleaned_clock_symbols:
+                cleaned_clock_symbols.append(symbol_value)
+        cfg.temporal.clock_sync_reference_symbols = cleaned_clock_symbols
+    if cfg.temporal.clock_sync_max_tick_age_seconds <= 0:
+        errors.append("clock_sync_max_tick_age_seconds debe ser > 0.")
     if not cfg.temporal.closed_trades_cursor_path:
         errors.append("closed_trades_cursor_path no puede estar vacio.")
+    if not cfg.temporal.closed_trades_ledger_path:
+        errors.append("closed_trades_ledger_path no puede estar vacio.")
     if cfg.temporal.closed_trades_overlap_minutes < 0:
         errors.append("closed_trades_overlap_minutes no puede ser negativo.")
     if cfg.temporal.closed_trades_initial_lookback_hours <= 0:
@@ -587,8 +606,6 @@ def validate_config(cfg: BotConfig) -> None:
 # 6) Ejecucion directa (opcional)
 # =============================================================================
 if __name__ == "__main__":
-    _reexec_with_project_venv_if_needed()
-
     # Forzar cwd al directorio del proyecto para que cualquier ruta relativa
     # se resuelva siempre contra este proyecto, aunque se ejecute desde otra carpeta.
     os.chdir(os.path.dirname(os.path.abspath(__file__)))

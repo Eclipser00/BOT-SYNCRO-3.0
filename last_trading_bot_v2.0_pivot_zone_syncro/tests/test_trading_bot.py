@@ -10,6 +10,7 @@ from bot_trading.application.risk_management import RiskManager
 from bot_trading.application.strategies.base import Strategy
 from bot_trading.domain.entities import OrderResult, RiskLimits, SymbolConfig, TradeRecord
 from tests.conftest import DummyStrategy
+from bot_trading.infrastructure.closed_trades_ledger import ClosedTradesLedger
 from bot_trading.infrastructure.data_fetcher import MarketDataService
 
 
@@ -36,6 +37,22 @@ class FakeBroker:
 
     def get_closed_trades(self):
         return []
+
+
+def _trade_with_pnl(pnl: float, exit_minute: int = 0) -> TradeRecord:
+    now = datetime(2026, 1, 1, 10, exit_minute, tzinfo=timezone.utc)
+    return TradeRecord(
+        symbol="EURUSD",
+        strategy_name="dummy",
+        entry_time=now - timedelta(minutes=5),
+        exit_time=now,
+        entry_price=1.0,
+        exit_price=1.0,
+        size=0.01,
+        pnl=pnl,
+        stop_loss=None,
+        take_profit=None,
+    )
 
 
 def _build_bot_for_clock_sync(broker) -> TradingBot:
@@ -68,6 +85,57 @@ def test_trading_bot_run_once_ejecuta_flujo_basico() -> None:
     bot.run_once(now=now)
 
     assert len(broker.orders_sent) == 1
+
+
+def test_run_once_usa_snapshot_riesgo_del_broker_en_vez_de_trade_history() -> None:
+    class BrokerWithRiskSnapshot(FakeBroker):
+        def __init__(self) -> None:
+            super().__init__()
+            self.risk_calls = 0
+
+        def get_risk_closed_trades_snapshot(self, to_utc):
+            self.risk_calls += 1
+            return []
+
+    broker = BrokerWithRiskSnapshot()
+    risk_manager = RiskManager(RiskLimits(dd_global=5.0, initial_balance=10000.0))
+    bot = TradingBot(
+        broker_client=broker,
+        market_data_service=MarketDataService(broker),
+        risk_manager=risk_manager,
+        order_executor=OrderExecutor(broker),
+        strategies=[DummyStrategy("dummy", ["EURUSD"])],
+        symbols=[SymbolConfig(name="EURUSD", min_timeframe="M1")],
+        trade_history=[
+            _trade_with_pnl(1000.0, exit_minute=0),
+            _trade_with_pnl(-600.0, exit_minute=1),
+        ],
+    )
+
+    bot.run_once(now=datetime(2026, 1, 1, 10, 10, tzinfo=timezone.utc))
+
+    assert broker.risk_calls == 1
+    assert len(broker.orders_sent) == 1
+
+
+def test_run_once_bloquea_si_snapshot_riesgo_del_broker_falla() -> None:
+    class BrokerWithBrokenRiskSnapshot(FakeBroker):
+        def get_risk_closed_trades_snapshot(self, to_utc):
+            raise RuntimeError("historial MT5 no disponible")
+
+    broker = BrokerWithBrokenRiskSnapshot()
+    bot = TradingBot(
+        broker_client=broker,
+        market_data_service=MarketDataService(broker),
+        risk_manager=RiskManager(RiskLimits(dd_global=30.0, initial_balance=100000.0)),
+        order_executor=OrderExecutor(broker),
+        strategies=[DummyStrategy("dummy", ["EURUSD"])],
+        symbols=[SymbolConfig(name="EURUSD", min_timeframe="M1")],
+    )
+
+    bot.run_once(now=datetime(2026, 1, 1, 10, 10, tzinfo=timezone.utc))
+
+    assert broker.orders_sent == []
 
 
 def test_trading_bot_run_once_invoca_market_data_callback() -> None:
@@ -227,6 +295,98 @@ def test_update_trade_history_deduplica_por_position_y_exit_deal_ticket() -> Non
     assert len(executor.events) == 2
     assert executor.events[0]["order_id"] == "1234567002"
     assert executor.events[1]["order_id"] == "1234567002"
+
+
+def test_trading_bot_carga_historico_desde_ledger_al_arrancar(tmp_path) -> None:
+    ledger = ClosedTradesLedger(tmp_path / "closed_trades_ledger.jsonl")
+    late_trade = TradeRecord(
+        symbol="EURUSD",
+        strategy_name="dummy",
+        entry_time=datetime(2026, 1, 1, 11, 0, tzinfo=timezone.utc),
+        exit_time=datetime(2026, 1, 1, 11, 15, tzinfo=timezone.utc),
+        entry_price=1.1000,
+        exit_price=1.1010,
+        size=0.10,
+        pnl=10.0,
+        stop_loss=None,
+        take_profit=None,
+        position_id=2,
+        exit_deal_ticket=20,
+    )
+    early_trade = TradeRecord(
+        symbol="EURUSD",
+        strategy_name="dummy",
+        entry_time=datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc),
+        exit_time=datetime(2026, 1, 1, 10, 15, tzinfo=timezone.utc),
+        entry_price=1.1000,
+        exit_price=1.1010,
+        size=0.10,
+        pnl=10.0,
+        stop_loss=None,
+        take_profit=None,
+        position_id=1,
+        exit_deal_ticket=10,
+    )
+    ledger.append_new([late_trade, early_trade])
+
+    broker = FakeBroker()
+    bot = TradingBot(
+        broker_client=broker,
+        market_data_service=MarketDataService(broker),
+        risk_manager=RiskManager(RiskLimits()),
+        order_executor=OrderExecutor(broker),
+        strategies=[],
+        symbols=[SymbolConfig(name="EURUSD", min_timeframe="M1")],
+        closed_trades_ledger=ledger,
+    )
+
+    assert [trade.exit_deal_ticket for trade in bot.trade_history] == [10, 20]
+
+
+def test_update_trade_history_persiste_ledger_y_confirma_cursor(tmp_path) -> None:
+    class BrokerWithCommit(FakeBroker):
+        def __init__(self, trades: list[TradeRecord]) -> None:
+            super().__init__()
+            self._closed_trades = trades
+            self.commit_calls = 0
+
+        def get_closed_trades(self):
+            return list(self._closed_trades)
+
+        def commit_closed_trades_cursor(self) -> None:
+            self.commit_calls += 1
+
+    trade = TradeRecord(
+        symbol="EURUSD",
+        strategy_name="dummy",
+        entry_time=datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc),
+        exit_time=datetime(2026, 1, 1, 10, 15, tzinfo=timezone.utc),
+        entry_price=1.1000,
+        exit_price=1.1055,
+        size=0.20,
+        pnl=110.0,
+        stop_loss=1.0950,
+        take_profit=1.1100,
+        position_id=777001,
+        exit_deal_ticket=4002,
+    )
+    broker = BrokerWithCommit([trade])
+    ledger = ClosedTradesLedger(tmp_path / "closed_trades_ledger.jsonl")
+    bot = TradingBot(
+        broker_client=broker,
+        market_data_service=MarketDataService(broker),
+        risk_manager=RiskManager(RiskLimits()),
+        order_executor=OrderExecutor(broker),
+        strategies=[],
+        symbols=[SymbolConfig(name="EURUSD", min_timeframe="M1")],
+        closed_trades_ledger=ledger,
+    )
+
+    bot._update_trade_history()
+
+    assert len(bot.trade_history) == 1
+    assert len(ledger.load()) == 1
+    assert broker.commit_calls == 1
 
 
 def test_sync_clock_with_broker_aplica_offset() -> None:

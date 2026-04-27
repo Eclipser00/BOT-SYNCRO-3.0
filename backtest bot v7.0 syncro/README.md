@@ -42,6 +42,7 @@ Arranque
                 ├── risk.py determina tamaño de posición
                 ├── Abre orden si hay señal válida
                 ├── Evalúa SL / TP en cada barra
+                ├── Puede reemplazar el SL una sola vez con break-even estructural por pivote
                 └── Cierra posición cuando se cumple condición
                     └── stats.py acumula resultados
                         └── report.py + chart.py exportan salidas
@@ -70,7 +71,7 @@ filters.py
 ```
 simulator.py
 ├── Estado de posición abierta (precio entrada, tamaño, dirección)
-├── Evaluación de SL fijo y TP fijo por barra
+├── Evaluación de SL inicial, break-even estructural único y TP por barra
 ├── Gestión de posiciones parciales (si aplica)
 └── Registro de cada trade en events.csv
 
@@ -81,6 +82,20 @@ risk.py
 ```
 
 El simulador mantiene un único estado de posición activa; no permite pirámide ni múltiples posiciones simultáneas. El tamaño se recalcula en cada nueva entrada con el capital real del momento, lo que hace que las rachas de pérdidas reduzcan automáticamente la exposición.
+
+## Stop dinámico una sola vez
+
+La estrategia `PivotZoneTest` no usa trailing continuo. El stop inicial es estructural y se calcula con el último pivote confirmado de `TF_stop` dentro de la zona rota:
+
+- LONG: último swing low dentro de la zona rota.
+- SHORT: último swing high dentro de la zona rota.
+
+Después de ejecutarse la entrada, el backtest permite una única actualización de SL:
+
+- LONG: primer swing low confirmado en `TF_stop` posterior a la apertura y por encima del precio de entrada.
+- SHORT: primer swing high confirmado en `TF_stop` posterior a la apertura y por debajo del precio de entrada.
+
+Si se cumple la regla, el motor cancela la orden `Stop` previa y crea una nueva orden `Stop` con ese pivote. Después bloquea nuevas actualizaciones del SL durante esa operación.
 
 ## Analytics
 
@@ -105,7 +120,7 @@ report.py
 |---|---|---|
 | `INITIAL_CAPITAL` | 10000 | Capital inicial de la simulación |
 | `RISK_PER_TRADE` | 0.01 | Fracción del capital arriesgada por operación |
-| `SL_ATR_MULT` | 1.5 | Multiplicador ATR para Stop Loss |
+| `SL_ATR_MULT` | 1.5 | Parámetro legacy para estrategias ATR; `PivotZoneTest` usa stop estructural por pivote |
 | `TP_ATR_MULT` | 3.0 | Multiplicador ATR para Take Profit |
 | `EMA_FAST` | 20 | Período EMA rápida para señales |
 | `EMA_SLOW` | 50 | Período EMA lenta para filtro de tendencia |

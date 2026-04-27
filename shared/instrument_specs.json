@@ -1,6 +1,6 @@
 {
-  "ADI": {
-    "margin_per_lot": 70.08,
+  "AAPL": {
+    "margin_per_lot": 54.23,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -8,8 +8,8 @@
     "volume_min": 1.0,
     "volume_step": 1.0
   },
-  "ADSK": {
-    "margin_per_lot": 43.71,
+  "AMGN": {
+    "margin_per_lot": 68.94,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -17,8 +17,8 @@
     "volume_min": 1.0,
     "volume_step": 1.0
   },
-  "AEP": {
-    "margin_per_lot": 27.27,
+  "AMZN": {
+    "margin_per_lot": 52.79,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -27,7 +27,7 @@
     "volume_step": 1.0
   },
   "AXP": {
-    "margin_per_lot": 62.76,
+    "margin_per_lot": 62.82,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -35,8 +35,8 @@
     "volume_min": 1.0,
     "volume_step": 1.0
   },
-  "BAC": {
-    "margin_per_lot": 10.5,
+  "BA": {
+    "margin_per_lot": 46.54,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -44,8 +44,8 @@
     "volume_min": 1.0,
     "volume_step": 1.0
   },
-  "BK": {
-    "margin_per_lot": 25.51,
+  "CAT": {
+    "margin_per_lot": 166.17,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -53,8 +53,8 @@
     "volume_min": 1.0,
     "volume_step": 1.0
   },
-  "BKR": {
-    "margin_per_lot": 12.57,
+  "CRM": {
+    "margin_per_lot": 35.66,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -62,8 +62,8 @@
     "volume_min": 1.0,
     "volume_step": 1.0
   },
-  "BLK": {
-    "margin_per_lot": 200.01,
+  "CSCO": {
+    "margin_per_lot": 17.81,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -71,8 +71,8 @@
     "volume_min": 1.0,
     "volume_step": 1.0
   },
-  "CARR": {
-    "margin_per_lot": 12.66,
+  "CVX": {
+    "margin_per_lot": 37.03,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -80,8 +80,8 @@
     "volume_min": 1.0,
     "volume_step": 1.0
   },
-  "CFG": {
-    "margin_per_lot": 64.19,
+  "DIS": {
+    "margin_per_lot": 20.52,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -89,8 +89,8 @@
     "volume_min": 1.0,
     "volume_step": 1.0
   },
-  "CMCSA": {
-    "margin_per_lot": 5.58,
+  "GS": {
+    "margin_per_lot": 185.81,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -98,134 +98,8 @@
     "volume_min": 1.0,
     "volume_step": 1.0
   },
-  "CMG": {
-    "margin_per_lot": 6.82,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "CMI": {
-    "margin_per_lot": 123.41,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "COF": {
-    "margin_per_lot": 38.6,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "CSX": {
-    "margin_per_lot": 8.45,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "CVS": {
-    "margin_per_lot": 15.87,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "DE": {
-    "margin_per_lot": 121.05,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "EA": {
-    "margin_per_lot": 40.59,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "EBAY": {
-    "margin_per_lot": 19.08,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "FANG": {
-    "margin_per_lot": 37.62,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "FCX": {
-    "margin_per_lot": 13.58,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "FDX": {
-    "margin_per_lot": 74.94,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "FE": {
-    "margin_per_lot": 10.29,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "FSLR": {
-    "margin_per_lot": 40.78,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "GD": {
-    "margin_per_lot": 67.05,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "HBAN": {
-    "margin_per_lot": 3.2800000000000002,
+  "HD": {
+    "margin_per_lot": 67.18,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -234,7 +108,7 @@
     "volume_step": 1.0
   },
   "HON": {
-    "margin_per_lot": 47.02,
+    "margin_per_lot": 42.64,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -242,8 +116,8 @@
     "volume_min": 1.0,
     "volume_step": 1.0
   },
-  "HPE": {
-    "margin_per_lot": 4.99,
+  "IBM": {
+    "margin_per_lot": 46.37,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -251,26 +125,8 @@
     "volume_min": 1.0,
     "volume_step": 1.0
   },
-  "INTC": {
-    "margin_per_lot": 12.48,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "JBHT": {
-    "margin_per_lot": 45.48,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "JCI": {
-    "margin_per_lot": 28.45,
+  "JNJ": {
+    "margin_per_lot": 45.49,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -279,7 +135,7 @@
     "volume_step": 1.0
   },
   "JPM": {
-    "margin_per_lot": 62.0,
+    "margin_per_lot": 61.73,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -287,8 +143,8 @@
     "volume_min": 1.0,
     "volume_step": 1.0
   },
-  "KEY": {
-    "margin_per_lot": 21.48,
+  "KO": {
+    "margin_per_lot": 15.33,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -296,62 +152,8 @@
     "volume_min": 1.0,
     "volume_step": 1.0
   },
-  "KEYS": {
-    "margin_per_lot": 64.93,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "KHC": {
-    "margin_per_lot": 4.62,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "KMI": {
-    "margin_per_lot": 6.54,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "MA": {
-    "margin_per_lot": 99.92,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "MCHP": {
-    "margin_per_lot": 14.32,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "MCO": {
-    "margin_per_lot": 85.7,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "MET": {
-    "margin_per_lot": 14.79,
+  "MCD": {
+    "margin_per_lot": 59.95,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -360,7 +162,7 @@
     "volume_step": 1.0
   },
   "MMM": {
-    "margin_per_lot": 30.04,
+    "margin_per_lot": 29.31,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -368,8 +170,8 @@
     "volume_min": 1.0,
     "volume_step": 1.0
   },
-  "MPWR": {
-    "margin_per_lot": 270.54,
+  "MRK": {
+    "margin_per_lot": 22.4,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -377,8 +179,8 @@
     "volume_min": 1.0,
     "volume_step": 1.0
   },
-  "MRNA": {
-    "margin_per_lot": 10.2,
+  "MSFT": {
+    "margin_per_lot": 84.91,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -386,8 +188,8 @@
     "volume_min": 1.0,
     "volume_step": 1.0
   },
-  "NEE": {
-    "margin_per_lot": 18.84,
+  "NKE": {
+    "margin_per_lot": 8.95,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -395,8 +197,8 @@
     "volume_min": 1.0,
     "volume_step": 1.0
   },
-  "NEM": {
-    "margin_per_lot": 24.18,
+  "NVDA": {
+    "margin_per_lot": 41.66,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -404,8 +206,8 @@
     "volume_min": 1.0,
     "volume_step": 1.0
   },
-  "NOC": {
-    "margin_per_lot": 134.89,
+  "PG": {
+    "margin_per_lot": 29.63,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -413,116 +215,8 @@
     "volume_min": 1.0,
     "volume_step": 1.0
   },
-  "NRG": {
-    "margin_per_lot": 32.93,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "OKE": {
-    "margin_per_lot": 17.25,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "PCAR": {
-    "margin_per_lot": 25.46,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "PRU": {
-    "margin_per_lot": 19.39,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "PWR": {
-    "margin_per_lot": 117.17,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "RTX": {
-    "margin_per_lot": 40.33,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "SBUX": {
-    "margin_per_lot": 19.33,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "SNPS": {
-    "margin_per_lot": 78.65,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "STLD": {
-    "margin_per_lot": 38.13,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "SYF": {
-    "margin_per_lot": 14.52,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "T": {
-    "margin_per_lot": 5.29,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "TGT": {
-    "margin_per_lot": 24.37,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "TMUS": {
-    "margin_per_lot": 39.17,
+  "SHW": {
+    "margin_per_lot": 67.62,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -531,7 +225,7 @@
     "volume_step": 1.0
   },
   "TRV": {
-    "margin_per_lot": 59.68,
+    "margin_per_lot": 60.56,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -539,17 +233,8 @@
     "volume_min": 1.0,
     "volume_step": 1.0
   },
-  "TXN": {
-    "margin_per_lot": 42.92,
-    "trade_contract_size": 1.0,
-    "trade_tick_size": 0.01,
-    "trade_tick_value": 0.01,
-    "volume_max": 100000.0,
-    "volume_min": 1.0,
-    "volume_step": 1.0
-  },
-  "USB": {
-    "margin_per_lot": 27.82,
+  "UNH": {
+    "margin_per_lot": 71.07,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -558,7 +243,7 @@
     "volume_step": 1.0
   },
   "V": {
-    "margin_per_lot": 60.93,
+    "margin_per_lot": 61.94,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -566,8 +251,8 @@
     "volume_min": 1.0,
     "volume_step": 1.0
   },
-  "WFC": {
-    "margin_per_lot": 17.09,
+  "VZ": {
+    "margin_per_lot": 9.29,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,
@@ -575,8 +260,8 @@
     "volume_min": 1.0,
     "volume_step": 1.0
   },
-  "XOM": {
-    "margin_per_lot": 30.46,
+  "WMT": {
+    "margin_per_lot": 25.99,
     "trade_contract_size": 1.0,
     "trade_tick_size": 0.01,
     "trade_tick_value": 0.01,

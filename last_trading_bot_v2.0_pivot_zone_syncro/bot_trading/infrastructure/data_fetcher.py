@@ -68,6 +68,21 @@ def _ensure_utc_index(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _drop_open_base_bar(df: pd.DataFrame, base_tf: str, now: datetime) -> pd.DataFrame:
+    """Descarta velas base cuya hora de cierre aun no ha llegado."""
+    if df is None or df.empty:
+        return df
+    minutes = _TF_MINUTES.get(base_tf)
+    if minutes is None:
+        return df.copy()
+
+    now_ts = pd.Timestamp(_ensure_utc_datetime(now))
+    close_times = pd.DatetimeIndex(df.index) + pd.Timedelta(minutes=minutes)
+    closed_df = df.loc[close_times <= now_ts].copy()
+    closed_df.attrs.update(df.attrs)
+    return closed_df
+
+
 def _resample(df: pd.DataFrame, target_tf: str, symbol_name: str, drop_last_partial: bool = False) -> pd.DataFrame:
     """Resamplea un DataFrame base a un timeframe objetivo.
 
@@ -220,12 +235,14 @@ class ProductionDataProvider(BaseDataProvider):
                 self._base_cache[symbol.name] = concatenated
 
         base_df = self._base_cache[symbol.name]
+        closed_base_df = _drop_open_base_bar(base_df, base_tf, now)
+        closed_base_df.attrs["symbol"] = symbol.name
 
-        result: Dict[str, pd.DataFrame] = {base_tf: base_df}
+        result: Dict[str, pd.DataFrame] = {base_tf: closed_base_df}
         for tf in timeframes:
             if tf == base_tf:
                 continue
-            result[tf] = _resample(base_df, tf, symbol.name, drop_last_partial=True)
+            result[tf] = _resample(closed_base_df, tf, symbol.name, drop_last_partial=True)
         return result
 
 

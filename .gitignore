@@ -13,6 +13,7 @@ backtest bot v7.0 syncro/wf/*
 last_trading_bot_v2.0_pivot_zone_syncro/data_development/*
 last_trading_bot_v2.0_pivot_zone_syncro/logs/*
 last_trading_bot_v2.0_pivot_zone_syncro/outputs/*
+last_trading_bot_v2.0_pivot_zone_syncro/plots/*
 
 # No ignorar los .gitkeep
 !**/.gitkeep

@@ -94,6 +94,7 @@ class Position:
         strategy_name: Estrategia que abrió la posición.
         open_time: Fecha y hora de apertura.
         magic_number: Número mágico único para identificar la estrategia de forma robusta.
+        profit: PnL flotante actual de la posición.
     """
 
     symbol: str
@@ -104,6 +105,7 @@ class Position:
     strategy_name: str
     open_time: datetime
     magic_number: Optional[int] = None
+    profit: float = 0.0
 
 
 @dataclass

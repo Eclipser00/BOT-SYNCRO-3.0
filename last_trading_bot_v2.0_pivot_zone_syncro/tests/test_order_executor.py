@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from bot_trading.application.engine.order_executor import OrderExecutor
 from bot_trading.domain.entities import OrderRequest, OrderResult, Position
+from bot_trading.main import FakeBroker as DevelopmentFakeBroker
 
 
 class FakeBroker:
@@ -143,6 +144,45 @@ def test_order_executor_normaliza_ts_event_naive_a_utc() -> None:
     assert executor.events
     for event in executor.events:
         assert event["ts_event"].endswith("+00:00")
+
+
+def test_order_executor_registra_open_time_desde_ts_event() -> None:
+    broker = FakeBroker()
+    executor = OrderExecutor(broker)
+    request = OrderRequest(
+        symbol="EURUSD",
+        volume=0.01,
+        order_type="BUY",
+        magic_number=99,
+        ts_event="2026-03-31T00:39:00+00:00",
+    )
+
+    executor.execute_order(request)
+
+    assert executor.open_positions["EURUSD_99"].open_time == datetime(
+        2026, 3, 31, 0, 39, tzinfo=timezone.utc
+    )
+
+
+def test_fake_broker_development_usa_ts_event_como_open_time() -> None:
+    broker = DevelopmentFakeBroker()
+    broker._last_price["EURUSD"] = 1.14658
+    request = OrderRequest(
+        symbol="EURUSD",
+        volume=0.01,
+        order_type="BUY",
+        stop_loss=1.14573,
+        take_profit=1.14858,
+        magic_number=123,
+        ts_event="2026-03-31T00:39:00+00:00",
+        comment="PivotZoneTest-M3",
+    )
+
+    broker.send_market_order(request)
+
+    assert broker.open_positions[0].open_time == datetime(
+        2026, 3, 31, 0, 39, tzinfo=timezone.utc
+    )
 
 
 # ============================================
